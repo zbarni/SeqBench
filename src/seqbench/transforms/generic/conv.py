@@ -1,0 +1,323 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025-present, SeqBench Contributors
+
+"""
+Temporal convolution transform for sequence data processing.
+"""
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+from decimal import Decimal
+import numpy as np
+import torch
+import torch.nn.functional as F
+from typing import Optional
+import logging
+
+from seqbench.transforms.generic.utils import get_device_and_dtype
+
+logger = logging.getLogger(__name__)
+
+
+def make_temporal_kernel(
+    shape: str,
+    width: float = 3.0,
+    height: float = 1.0,
+    dt: float = 1.0,
+    normalize: bool = False,
+    device: Optional[torch.device] = None,
+    dtype: torch.dtype = torch.float32,
+    **kwargs,
+) -> torch.Tensor:
+    """
+    Create a smoothing kernel for convolution operations using PyTorch tensors.
+
+    Parameters
+    ----------
+    shape : str
+        Kernel type {'box', 'exp', 'alpha', 'double_exp', 'gauss', 'tri', 'sin'}
+    width : float, optional
+        Kernel width, by default 3.0
+    height : float, optional
+        Peak amplitude of the kernel, by default 1.0
+    dt : float, optional
+        Time step resolution, by default 1.0
+    normalize : bool, optional
+        Whether to normalize the kernel, by default False
+    device : torch.device, optional
+        PyTorch device to place tensor on, by default None (uses CPU)
+    dtype : torch.dtype, optional
+        PyTorch data type, by default torch.float32
+    **kwargs : dict
+        Additional parameters specific to each kernel type:
+        - 'exp': tau (time constant)
+        - 'double_exp': tau_1, tau_2 (time constants)
+        - 'alpha': tau (time constant)
+        - 'gauss': mu (mean), sigma (standard deviation)
+        - 'sin': frequency, phase_shift, mean_amplitude
+
+    Returns
+    -------
+    torch.Tensor
+        1D kernel tensor
+    """
+    if device is None:
+        device = torch.device("cpu")
+
+    # Create time axis
+    n_points = int((width / dt) + 1)
+    x = torch.arange(0.0, n_points, dtype=dtype, device=device) * dt
+
+    if shape == "box":
+        k = torch.ones_like(x) * height
+
+    elif shape == "exp":
+        assert "tau" in kwargs, "for exponential kernel, please specify tau"
+        tau = kwargs["tau"]
+        k = torch.exp(-x / tau) * height
+
+    elif shape == "double_exp":
+        assert "tau_1" in kwargs, "for double exponential kernel, please specify tau_1"
+        assert "tau_2" in kwargs, "for double exponential kernel, please specify tau_2"
+        tau_1 = kwargs["tau_1"]
+        tau_2 = kwargs["tau_2"]
+        tmp_k = -torch.exp(-x / tau_1) + torch.exp(-x / tau_2)
+        k = tmp_k * (height / torch.max(tmp_k))
+
+    elif shape == "alpha":
+        assert "tau" in kwargs, "for alpha kernel, please specify tau"
+        tau = kwargs["tau"]
+        tmp_k = (x / tau) * torch.exp(-x / tau)
+        k = tmp_k * (height / torch.max(tmp_k))
+
+    elif shape == "gauss":
+        assert "mu" in kwargs, "for Gaussian kernel, please specify mu"
+        assert "sigma" in kwargs, "for Gaussian kernel, please specify sigma"
+        sigma = kwargs["sigma"]
+        mu = kwargs["mu"]
+        tmp_k = (1.0 / (sigma * torch.sqrt(2.0 * torch.tensor(torch.pi, device=device)))) * torch.exp(
+            -((x - mu) ** 2.0 / (2.0 * (sigma**2.0)))
+        )
+        k = tmp_k * (height / torch.max(tmp_k))
+
+    elif shape == "tri":
+        halfwidth = int(width / 2)
+        trileft = torch.arange(1, halfwidth + 2, dtype=dtype, device=device)
+        triright = torch.arange(halfwidth, 0, -1, dtype=dtype, device=device)
+        k = torch.cat([trileft, triright])
+        k = k * height / torch.max(k)  # Normalize to height
+
+    elif shape == "sin":
+        assert "frequency" in kwargs, "for sin kernel, please specify frequency"
+        assert "phase_shift" in kwargs, "for sin kernel, please specify phase_shift"
+        assert "mean_amplitude" in kwargs, "for sin kernel, please specify mean_amplitude"
+        frequency = kwargs["frequency"]
+        phase_shift = kwargs["phase_shift"]
+        mean_amplitude = kwargs["mean_amplitude"]
+        k = torch.sin(2 * torch.pi * x / width * frequency + phase_shift) * height
+        k = k + mean_amplitude
+
+    else:
+        logger.info(
+            f"Kernel '{shape}' not implemented, please choose from "
+            "{'box', 'exp', 'alpha', 'double_exp', 'gauss', 'tri', 'sin'}"
+        )
+        k = torch.zeros(1, dtype=dtype, device=device)
+
+    if normalize:
+        k = k / torch.sum(k)
+
+    return k
+
+
+class TemporalConvolution:
+    # TODO better TemporalUnfolding?
+
+    def __init__(
+        self,
+        kernel_spec,
+        dt,
+        duration=None,
+        num_steps=None,
+        amplitude: float | dict = 1.0,
+        spike_pos="start",
+        **torch_kwargs,
+    ):
+        """
+        Unfolds a (static) tensor into a continuous signal, i.e., it converts the input tensor into temporal kernel responses
+        while adding a time dimension.
+
+
+        Parameters
+        ----------
+        kernel_spec : dict
+            Tuple of (kernel_type, kernel_params) where kernel_type is a string and
+            kernel_params is a dict of parameters for the kernel
+        dt : float
+            Time step resolution used for the kernel and sample time axis.
+        amp : float or torch.Tensor, optional
+            Amplitude scaling factor. Can be scalar, tensor broadcastable to `x`, or a distribution. Default is 1.0.
+        duration : float, optional
+            Duration of unfolded signal in seconds. If None, this is inferred from the time axis based on `dt` and
+            `num_steps`.
+        num_steps : int, optional
+            Number of discrete time steps in the unfolded signal. If None, this is inferred from the time axis based on `dt`
+            and `duration` as `int(np.floor(duration / dt))`.
+        spike_position : str, int, or float, optional
+            Where to center the kernel response:
+            - 'center': middle of time axis
+            - 'start': beginning of time axis
+            - 'end': end of time axis
+            - int: specific time index
+            - float: specific time value (will find nearest index)
+            By default 'center'
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor with shape (*inp_tensor.shape, len(time_axis)).
+            Each active element in inp_tensor becomes a temporal kernel response.
+
+        Examples
+        --------
+        >>> # Create a 2D input tensor (batch x features)
+        >>> inp = torch.tensor([[1.0, 0.0, 0.5], [0.0, 1.0, 0.0]])
+        >>> time_axis = torch.linspace(0, 10, 100)
+        >>> kernel_spec = ('gauss', {'mu': 0.0, 'sigma': 1.0})
+        >>> result = convolve_tensor(inp, time_axis, kernel_spec, dt=0.1)
+        >>> print(result.shape)  # torch.Size([2, 3, 100])
+        """
+
+        if not isinstance(kernel_spec, dict):  # config dict
+            if "shape" not in kernel_spec.keys() or "params" not in kernel_spec.keys():
+                raise ValueError("Incorrect / Incomplete kernel parameters are missing!")
+
+        # case where amplitudes and/or durations are drawn from distribution
+        if isinstance(amplitude, dict):
+            amplitude = amplitude["dist"](**amplitude["params"])
+        elif isinstance(amplitude, list):
+            raise ValueError("List of amplitudes not implemented")
+            assert len(amplitude) == len(self.vocabulary), "Nr of token amplitudes does not match vocabulary length!"
+            token_idx = self.vocabulary.index(token)
+            amplitude = amplitude[token_idx]
+        else:
+            amplitude = amplitude
+
+        if isinstance(duration, dict):
+            rounding_precision = -(Decimal(str(dt)).as_tuple().exponent)  # nr of decimal digits
+            duration = np.round(duration["dist"](**duration["params"]), rounding_precision)
+
+        self.kernel_spec = kernel_spec
+        self.dt = dt
+        self.duration = duration
+        self.amp = amplitude
+        self.spike_pos = spike_pos
+
+        kwargs = kernel_spec["params"] | torch_kwargs
+        self.kernel = make_temporal_kernel(kernel_spec["shape"], height=1.0, dt=dt, normalize=False, **kwargs)
+
+        if num_steps and duration:
+            if num_steps != int(np.floor(duration / dt)):
+                raise ValueError("When both are specified, dt, num_steps and duration must be consistent!")
+        elif num_steps is None:
+            assert duration
+            num_steps = int(np.floor(duration / dt))
+
+        self.time_axis = torch.arange(num_steps) * dt
+
+    # def __call_NEW_WRONG__(self, x: torch.Tensor) -> torch.Tensor:
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of arbitrary shape. Active elements will generate temporal responses.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor with shape (T, *x.shape).
+            Each active element in inp_tensor becomes a temporal kernel response.
+        """
+        # ----- 1. Determine spike index -----
+        device, dtype = get_device_and_dtype(x)
+        T = self.time_axis.numel()
+
+        if isinstance(self.spike_pos, int):
+            idx = self.spike_pos
+        else:
+            if self.spike_pos == "start":
+                idx = 0
+            elif self.spike_pos == "center":
+                idx = T // 2
+            elif self.spike_pos == "end":
+                idx = T - 1
+            else:
+                raise ValueError(f"Invalid spike_time_choose: {self.spike_pos}")
+
+        # ----- 2. Compute amplitudes -----
+        if self.amp is not None:
+            amps = x * self.amp
+        elif not is_binary(x):
+            amps = x
+        else:
+            amps = (x != 0).float()
+
+        # Create spike trains with output shape: (*x_shape, T)
+        shape = x.shape
+        spikes = torch.zeros(*shape, T, device=x.device, dtype=torch.float32)
+        spikes[..., idx] = amps  # place all impulses at chosen index
+
+        # Prepare convolution kernel
+        kernel = self.kernel.to(x.device).float()
+        kernel_len = kernel.numel()
+
+        # F.conv1d does cross-correlation, so flip kernel for true convolution
+        kernel_flipped = kernel.flip(0).view(1, 1, -1)
+
+        # For causal response: kernel[0] at spike_pos, kernel[1] at spike_pos+1, etc.
+        # We need left-padding only (pad before the signal, not after)
+        pad_left = kernel_len - 1
+
+        # Batched convolution
+        spikes_flat = spikes.reshape(-1, 1, T)  # (N, 1, T)
+
+        # Manual padding - only on the left for causal response
+        spikes_padded = F.pad(spikes_flat, (pad_left, 0), mode="constant", value=0)
+
+        # Convolve with no additional padding
+        conv_flat = F.conv1d(spikes_padded, kernel_flipped, padding=0)
+
+        # The output should now be exactly length T
+        # Verify and trim if needed
+        if conv_flat.shape[2] > T:
+            conv_flat = conv_flat[:, :, :T]
+
+        conv = conv_flat.reshape(*shape, T)  # reshape back
+        conv = conv.permute(-1, *range(conv.ndim - 1))  # Move time axis to front
+
+        return conv
+        # sns.heatmap(x.T, cmap="viridis")
+        # plt.show()
+        # sns.lineplot(kernel)
+        # plt.show()
+
+
+def is_binary(tensor: torch.Tensor, threshold: float = 1e-6) -> bool:
+    """
+    Check if tensor contains only binary values (0 and 1).
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Input tensor to check
+    threshold : float, optional
+        Tolerance for floating point comparison, by default 1e-6
+
+    Returns
+    -------
+    bool
+        True if tensor contains only binary values
+    """
+    unique_vals = torch.unique(tensor)
+    return len(unique_vals) <= 2 and torch.allclose(unique_vals, torch.round(unique_vals), atol=threshold)
