@@ -1,7 +1,7 @@
 # SeqBench
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSES/LICENSE)
 
 ! **Development Status:** 3 – Alpha: The codebase is still under active development, with potential API modifications.
 
