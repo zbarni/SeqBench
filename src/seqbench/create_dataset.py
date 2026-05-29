@@ -18,17 +18,11 @@ import argparse
 
 import numpy as np
 
-from seqbench.utils.config import Config
+from seqbench import config as cfg_mod
 from seqbench.seq_dataset import DatasetGenerator
-from seqbench import create_base_dataset_from_config
-from seqbench.utils import prepare_config, get_config_hash
+from seqbench.utils import get_config_hash
 from seqbench.seq_utils.generator import SequenceGenerator
-
-try:
-    from symseq.seqwrapper import SeqWrapper
-    HAS_SYMSEQ = True
-except ImportError:
-    HAS_SYMSEQ = False
+from seqbench.sources import build_symseq_source
 
 __script_name__ = os.path.basename(__file__)
 
@@ -36,79 +30,75 @@ logger = logging.getLogger('create_dataset')
 
 
 def parse_cli_arguments():
-    """
-    Parse command-line arguments for the dataset creation script.
-    
-    Returns:
-        dict: Dictionary containing parsed arguments with 'config' key
-    """
     parser = argparse.ArgumentParser()
-
-    parser.add_argument('--config', type=str, required=True, 
+    parser.add_argument('--config', type=str, required=True,
         help='The path to the .yaml which contains all user defined parameters.')
-
     args = parser.parse_args()
-
     return vars(args)
+
 
 if __name__ == '__main__':
     args = parse_cli_arguments()
-    full_config = Config.parse_config_from_args(args)
-    full_config.print_config()
-    
-    # Extract seqbench config
-    config = full_config['seqbench']
-    config['config_file_path'] = args['config']
-    config = prepare_config(config)
-    seed = config['seed']
+    run_cfg = cfg_mod.load(args['config'])
+
+    assert run_cfg.seqbench is not None, "config must contain a 'seqbench' section"
+    assert run_cfg.symseq is not None, "config must contain a 'symseq' section"
+
+    seed = run_cfg.dataset.seed
+    train_size = int(run_cfg.dataset.splits['train'])
+    test_size = int(run_cfg.dataset.splits['test'])
+    output_dir = run_cfg.seqbench.storage.path
+
+    source = build_symseq_source(run_cfg.symseq.generator)
+
+    seq_generator = SequenceGenerator(
+        source,
+        seq_len_min=run_cfg.dataset.trial_length.min,
+        seq_len_max=run_cfg.dataset.trial_length.max,
+        combine_sequences=run_cfg.seqbench.composition.combine_sequences,
+        combined_seq_len=run_cfg.seqbench.composition.sample_length,
+        seed=seed,
+    )
 
     # Creating training dataset
-    config['dataset_size'] = config['data_generation']['train_size']
-    config_hash = get_config_hash(full_config)
-    dataset_root = config['data_generation']['output_dir']
-    dataset_root = f'{dataset_root}-{config_hash}'
-
     random.seed(seed)
     np.random.seed(seed)
 
-    # Get sequencer from symseq
-    if not HAS_SYMSEQ:
-        raise ImportError("symseq is required for dataset generation")
-
-    sw = SeqWrapper.from_dict(full_config)
-    sequencer = sw.generator
-    
-    seq_generator = SequenceGenerator(config, sequencer)
+    config_hash = get_config_hash(run_cfg, dataset_size=train_size)
+    dataset_root = f'{output_dir}-{config_hash}'
 
     dataset_generator = DatasetGenerator(
         seq_generator,
-        dataset_size=config['dataset_size'],
+        dataset_size=train_size,
         output_dir=dataset_root,
-        config_file_path=config['config_file_path'],
+        config_file_path=args['config'],
         generate_train=True,
         generate_test=False,
     )
-
     dataset_generator.generate()
 
-    # Creating testing dataset ...
-    config['dataset_size'] = config['data_generation']['test_size']
-    config_hash = get_config_hash(full_config)
-    dataset_root = config['data_generation']['output_dir']
-    dataset_root = f'{dataset_root}-{config_hash}'
-
+    # Creating testing dataset
     random.seed(seed)
     np.random.seed(seed)
 
-    seq_generator = SequenceGenerator(config, sequencer)
+    config_hash = get_config_hash(run_cfg, dataset_size=test_size)
+    dataset_root = f'{output_dir}-{config_hash}'
+
+    seq_generator = SequenceGenerator(
+        source,
+        seq_len_min=run_cfg.dataset.trial_length.min,
+        seq_len_max=run_cfg.dataset.trial_length.max,
+        combine_sequences=run_cfg.seqbench.composition.combine_sequences,
+        combined_seq_len=run_cfg.seqbench.composition.sample_length,
+        seed=seed,
+    )
 
     dataset_generator = DatasetGenerator(
         seq_generator,
-        dataset_size=config['dataset_size'],
+        dataset_size=test_size,
         output_dir=dataset_root,
-        config_file_path=config['config_file_path'],
+        config_file_path=args['config'],
         generate_train=False,
         generate_test=True,
     )
-    
     dataset_generator.generate()

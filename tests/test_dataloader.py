@@ -14,7 +14,8 @@ import os
 from torch.utils.data import DataLoader
 
 try:
-    from symseq.seqwrapper import SeqWrapper
+    from seqbench.sources import build_symseq_source
+    import symseq  # noqa: F401  # verify availability
     HAS_SYMSEQ = True
 except ImportError:
     HAS_SYMSEQ = False
@@ -53,15 +54,14 @@ def dataset_setup():
     np.random.seed(seed)
     torch.manual_seed(seed)
     
-    # Create sequence generator
-    sw = SeqWrapper.from_dict(config)
-    generator = sw.generator
-    
+    # Build symseq trial source
+    source = build_symseq_source(config["symseq"]["generator"])
+
     # Create base dataset
     kwargs = {}
-    if "alphabet_size" in config.get("symseq", {}).get("generator", {}).get("constraints", {}):
-        kwargs["alphabet_size"] = config["symseq"]["generator"]["constraints"]["alphabet_size"]
-    
+    if seqbench_config["input_mapping"]["base"] == "one_hot":
+        kwargs["alphabet_size"] = len(source.alphabet)
+
     base_dataset = create_base_dataset_from_config(seqbench_config, "train", **kwargs)
     
     # Compose transforms
@@ -75,7 +75,7 @@ def dataset_setup():
     # Create SeqDataset
     dataset = SeqDataset(
         config=seqbench_config,
-        generator=generator,
+        generator=source,
         base_dataset=base_dataset,
         is_train=True,
         pad_index=-1,

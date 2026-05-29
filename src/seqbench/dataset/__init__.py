@@ -20,33 +20,71 @@ from seqbench.dataset.synthetic import OneHot
 from seqbench.dataset.tonic_wrapper import TonicDatasetWrapper, TONIC_DATASET_REGISTRY
 
 
-def create_base_dataset_from_config(config, split, **kwargs):
+def create_base_dataset_from_config(config_or_input_mapping, split, **kwargs):
     """
     Factory function to create a base dataset from configuration.
-    
-    This function reads the input mapping configuration and instantiates the
-    appropriate dataset class based on the 'base' field in the config.
-    
+
+    Accepts either an :class:`~seqbench.config.InputMappingCfg` (new path) or
+    a legacy ``Config`` object with an ``input_mapping`` key (old path).
+
     Args:
-        config: Configuration object containing input_mapping settings
+        config_or_input_mapping: InputMappingCfg or legacy Config
         split: Dataset split ('train' or 'test')
-        **kwargs: Additional keyword arguments passed to dataset constructors
-            (e.g., 'alphabet_size' for one_hot datasets)
-    
-    Returns:
-        BaseDataset: An instance of the appropriate dataset class
-        
-    Raises:
-        ValueError: If the input encoding type is unknown or required parameters
-            are missing (e.g., alphabet_size for one_hot datasets)
-    
-    Supported base types:
-        - 'shd': Spiking Heidelberg Digits dataset
-        - 'ssc': Spiking Speech Commands dataset
-        - 'gsc': Google Speech Commands dataset
-        - 'one_hot': Synthetic one-hot encoded dataset
-        - Any key in TONIC_DATASET_REGISTRY: Tonic library datasets
+        **kwargs: Additional keyword arguments (e.g. ``alphabet_size`` for one_hot)
     """
+    # New path: InputMappingCfg passed directly (has .base as a dataclass field).
+    if hasattr(config_or_input_mapping, 'base'):
+        return _create_from_input_mapping_cfg(config_or_input_mapping, split, **kwargs)
+    # Old path: full Config with input_mapping key.
+    return _create_from_legacy_config(config_or_input_mapping, split, **kwargs)
+
+
+def _create_from_input_mapping_cfg(inp, split, **kwargs):
+    """New path — inp is an InputMappingCfg; extra fields are in inp.base_params."""
+    bp = inp.base_params  # plain dict
+
+    if inp.base == "shd":
+        return SpikingDataset(
+            "shd",
+            bp["base_dataset_path"],
+            split,
+            nb_steps=bp["nb_steps"],
+            max_time=bp["max_time"],
+            num_bins=bp.get("num_bins", 1),
+        )
+    if inp.base == "ssc":
+        return SpikingDataset(
+            "ssc",
+            bp["base_dataset_path"],
+            split,
+            nb_steps=bp["nb_steps"],
+            max_time=bp["max_time"],
+            num_bins=bp.get("num_bins", 1),
+        )
+    if inp.base == "gsc":
+        split = "training" if split == "train" else "testing"
+        return SpeechCommands(
+            data_folder=bp["base_dataset_path"],
+            split=split,
+            return_raw=bp.get("return_raw", False),
+        )
+    if inp.base == "one_hot":
+        if "alphabet_size" not in kwargs:
+            raise ValueError("alphabet_size must be provided for one_hot dataset!")
+        return OneHot(kwargs["alphabet_size"] + 1)
+    if inp.base.lower() in TONIC_DATASET_REGISTRY:
+        canonical_name = TONIC_DATASET_REGISTRY[inp.base.lower()]
+        return TonicDatasetWrapper(
+            dataset_name=canonical_name,
+            root=bp["base_dataset_path"],
+            split=split,
+            **{k: v for k, v in bp.items() if k != "base_dataset_path"},
+        )
+    raise ValueError(f"Unknown input encoding: {inp.base!r}")
+
+
+def _create_from_legacy_config(config, split, **kwargs):
+    """Old path — config is a full Config with an input_mapping key."""
     inp_map_config = config["input_mapping"]
     if inp_map_config["base"] == "shd":
         return SpikingDataset(
@@ -77,35 +115,24 @@ def create_base_dataset_from_config(config, split, **kwargs):
             method = inp_map_config["base_params"]["method"]
 
         return SpeechCommands(
-            # os.path.join(inp_map_config['base_dataset_path'], 'GSC'),
             data_folder=os.path.join(inp_map_config["base_dataset_path"]),
             split=split,
-            # method=method,  @Younes - double check what happened to this param
             return_raw=inp_map_config["return_raw", False],
         )
-
     elif inp_map_config["base"] == "one_hot":
         if "alphabet_size" not in kwargs:
             raise ValueError("alphabet_size must be provided for one_hot dataset!")
-        base_dataset = OneHot(kwargs["alphabet_size"] + 1)  # +1 for the end sequence symbol
-
-        return base_dataset
-    
+        return OneHot(kwargs["alphabet_size"] + 1)
     elif inp_map_config["base"].lower() in TONIC_DATASET_REGISTRY:
-        # Handle tonic datasets
         dataset_name_lower = inp_map_config["base"].lower()
         canonical_name = TONIC_DATASET_REGISTRY[dataset_name_lower]
         root = inp_map_config["base_dataset_path"]
-        
-        # Get additional parameters from base_params if provided
         base_params = inp_map_config.get("base_params", {})
-        
         return TonicDatasetWrapper(
             dataset_name=canonical_name,
             root=root,
             split=split,
             **base_params
         )
-
     else:
         raise ValueError(f"Unknown input encoding!")

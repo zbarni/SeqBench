@@ -3,12 +3,21 @@
 
 """
 Sequence generator utilities for creating synthetic sequence data.
+
+This module is the boundary between SeqBench and any external trial source
+(notably symseq generators). A ``source`` here is duck-typed against the
+``TrialSource`` Protocol: it must expose ``alphabet`` and ``draw_trial()``.
+
+Token → class-index conversion is handled by :class:`SymbolEncoder` rather
+than the old hardcoded ``ord(s) - 64`` arithmetic, so any alphabet works.
 """
 
 import logging
 from dataclasses import dataclass
 
 import numpy as np
+
+from seqbench.seq_utils.symbol_encoder import SymbolEncoder
 
 logger = logging.getLogger('generator')
 
@@ -32,84 +41,111 @@ class SequenceGenerator:
 
     def __init__(
         self,
-        params,
-        sequencer,
+        source,
+        *,
+        seq_len_min: int,
+        seq_len_max: int,
+        combine_sequences: bool,
+        combined_seq_len: int,
+        seed=None,
         compute_te=False,
-        plot_transition_table=False
+        plot_transition_table=False,
     ):
-        self.params = params
-        # Access data_generation parameters with nested structure
-        data_gen = params['data_generation']
-        self.seq_len = data_gen['seq_len_max']
-        self.seed = params['seed']
+        self.seq_len_min = seq_len_min
+        self.seq_len = seq_len_max
+        self.seed = seed
         self.compute_te = compute_te
         self.plot_transition_table = plot_transition_table
         self.n_max_tries = 1e4  # number of maximum attempts to generate a string of correct length
         self.num_illustration_seq = 4
-        
-        self.combine_sequences = data_gen['combine_sequences']
-        self.combined_seq_len = data_gen['combined_seq_length']
+
+        self.combine_sequences = combine_sequences
+        self.combined_seq_len = combined_seq_len
 
         logger.info(f"Task RNG seed {self.seed}")
 
-        self.sequencer = sequencer
+        self.source = source
+        self.encoder = SymbolEncoder(source.alphabet)
 
-        # compute TE, correct needs to be set to True
+        # Topological entropy — only available for grammar sources.
         if self.compute_te:
-            transition_table = (self.sequencer.transition_table(correct=True,
-                                                                display=False) > 0).astype(int)
-            TE = self.sequencer.topological_entropy(transitions=transition_table,
-                                                    method='direct')
-            try:
-                import wandb
-                wandb.log({'TE': TE})
-            except:
-                pass
+            if hasattr(self.source, 'transition_table') and hasattr(self.source, 'topological_entropy'):
+                transition_table = (self.source.transition_table(correct=True,
+                                                                 display=False) > 0).astype(int)
+                TE = self.source.topological_entropy(transitions=transition_table,
+                                                     method='direct')
+                try:
+                    import wandb
+                    wandb.log({'TE': TE})
+                except:
+                    pass
 
-            print(f"TE:\t{TE}")
-            print("####")
+                print(f"TE:\t{TE}")
+                print("####")
+            else:
+                logger.info("compute_te requested but source has no transition_table; skipping.")
 
-        # plot transition table
+        # Transition-table plot — only available for grammar sources.
         if self.plot_transition_table:
-            import matplotlib.pyplot as plt
-            from seqbench.seq_utils.markov_chain import MarkovChain
+            if hasattr(self.source, 'transition_table') and hasattr(self.source, 'states'):
+                import matplotlib.pyplot as plt
+                from seqbench.seq_utils.markov_chain import MarkovChain
 
-            P = self.sequencer.transition_table(correct=False,
-                                                display=True).T
-            mc = MarkovChain(P, self.sequencer.states,
-                             node_fontsize=10,
-                             node_radius=1.,
-                             fontsize=10)
-            #fig = mc.draw(title=f"start states: {grammar['start_states']}, TE: {round(TE, 2)}")
+                P = self.source.transition_table(correct=False,
+                                                 display=True).T
+                mc = MarkovChain(P, self.source.states,
+                                 node_fontsize=10,
+                                 node_radius=1.,
+                                 fontsize=10)
 
-            for _ in range(self.num_illustration_seq):
-                x = self.generate_sequence()
-                seqs = x.state_seq
-                print(seqs)
+                for _ in range(self.num_illustration_seq):
+                    x = self.generate_sequence()
+                    seqs = x.state_seq
+                    print(seqs)
 
-            start_states = [str(item) for item in self.params['gramm']['start_states']]
-            try:
-                mc.draw(title=f"start states: {start_states}, TE: {round(TE, 2)}",
-                        figsize=(5,5))
-            except:
-                mc.draw(title=f"start states: {start_states}",
-                        figsize=(5,5))
+                start_states = (
+                    [str(item) for item in self.source.start_states]
+                    if hasattr(self.source, 'start_states') else []
+                )
+                try:
+                    mc.draw(title=f"start states: {start_states}, TE: {round(TE, 2)}",
+                            figsize=(5,5))
+                except:
+                    mc.draw(title=f"start states: {start_states}",
+                            figsize=(5,5))
 
-            fname = "grammar" 
-            path = "."
-            #TE_r = round(TE, 2)
-            print(f'Save {path}/{fname}.pdf and {path}/{fname}.png')
-            plt.savefig(f'{path}/{fname}.pdf')
-            plt.savefig(f'{path}/{fname}.png', dpi=300)
+                fname = "grammar"
+                path = "."
+                print(f'Save {path}/{fname}.pdf and {path}/{fname}.png')
+                plt.savefig(f'{path}/{fname}.pdf')
+                plt.savefig(f'{path}/{fname}.png', dpi=300)
 
-            plt.close()
- 
+                plt.close()
+            else:
+                logger.info("plot_transition_table requested but source has no transition_table; skipping.")
+
+    @classmethod
+    def from_config(cls, config, source, **kwargs):
+        """Construct from a legacy Config object (backward compat for seq_dataset.py)."""
+        data_gen = config['data_generation']
+        return cls(
+            source,
+            seq_len_min=data_gen['seq_len_min'],
+            seq_len_max=data_gen['seq_len_max'],
+            combine_sequences=data_gen['combine_sequences'],
+            combined_seq_len=data_gen['combined_seq_length'],
+            seed=config['seed'],
+            **kwargs,
+        )
+
     def generate(self, idx, compute_length=True):
-        
+
+        # Per-sample seeding. symseq generators expose a writable .rng;
+        # other sources may choose to ignore this.
         if self.seed is not None:
-            self.sequencer.rng = np.random.default_rng(self.seed * idx)
+            self.source.rng = np.random.default_rng(self.seed * idx)
         else:
-            self.sequencer.rng = np.random.default_rng()
+            self.source.rng = np.random.default_rng()
 
         if self.combine_sequences:
             gen_sample = self.generate_sequences()
@@ -118,7 +154,7 @@ class SequenceGenerator:
 
         if compute_length:
             gen_sample.length = self.__compute_sequence_length(gen_sample.class_seq)
-        
+
         return gen_sample
 
     def __compute_sequence_length(self, seq):
@@ -143,7 +179,7 @@ class SequenceGenerator:
         comb_sample.state_seq = comb_sample.state_seq[:self.combined_seq_len]
 
         return comb_sample
-    
+
     def __concat_samples(self, comb_sample, sample):
         comb_sample.class_seq = np.concatenate((comb_sample.class_seq, sample.class_seq))
         comb_sample.state_seq = np.concatenate((comb_sample.state_seq, sample.state_seq))
@@ -154,37 +190,26 @@ class SequenceGenerator:
 
     def generate_sequence(self):
 
-        sequence = []
+        seq_len_min = self.seq_len_min
+        seq_len_max = self.seq_len
+
+        symbols: list[str] = []
+        states: list[str] = []
         cnt = 0
-        data_gen = self.params['data_generation']
-        while not (data_gen['seq_len_min'] <= len(sequence) <= data_gen['seq_len_max']):
-            sequence = self.sequencer.generate_string(max_length=data_gen['seq_len_max'], as_states=True)
-
-            #min_length: int = 0,
-            #max_length: int = int(1e4),
-            #length_range: tuple | None = None,
-            #remove_eos: bool = True,
-            #as_states: bool = False,
-            #max_iter: int = int(1e3),
-
-            #assert isinstance(sequence, tuple)
-            
-            sequence #= sequence[0] 
+        while not (seq_len_min <= len(symbols) <= seq_len_max):
+            trial = self.source.draw_trial()
+            symbols = list(trial.symbols)
+            states = list(trial.states) if trial.states is not None else list(symbols)
 
             if cnt > self.n_max_tries:
                 raise RuntimeError("Could not generate a string of wanted length!")
             cnt += 1
 
-        if not self.combine_sequences:
-            assert self.__is_valid(sequence)
-
-        state_seq = sequence + ['#']
+        # Append EOS marker to both views; encoder maps '#' -> 0.
+        state_seq = states + [SymbolEncoder.EOS_SYMBOL]
         state_seq = [sym.replace("(", "").replace(")", "") for sym in state_seq]
 
-        #sequence = sequence[:-1] # If A0 B1 C2 # -> A0 B1 C2
-        #TODO: code doesn't support arbitrary class indices, it supports only A, B, C, a, b, c, ...
-        class_indices = [sym[0] if len(sym) > 1 else sym for sym in  sequence] # A0 B1 C2 -> A B C
-        class_indices = [ord(s)-64 if s.isupper() else ord(s)-70 for s in class_indices] + [0] # A B C -> 1 2 3 0
+        class_indices = self.encoder.encode(symbols) + [SymbolEncoder.EOS_INDEX]
 
         assert len(class_indices) == len(state_seq)
 
@@ -196,8 +221,3 @@ class SequenceGenerator:
             state_seq,
             0
         )
-
-    def __is_valid(self, sequence):
-        if sequence[-1] != '#':
-            return False
-        return True 

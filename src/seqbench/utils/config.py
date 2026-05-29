@@ -110,7 +110,7 @@ class Config:
         as_dict = {}
         for k, v in self.items():
             if isinstance(v, Config):
-                as_dict[k] = v.as_dict()
+                as_dict[k] = v.asdict()
             else:
                 as_dict[k] = v
         return as_dict

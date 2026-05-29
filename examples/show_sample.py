@@ -16,8 +16,8 @@ from seqbench.utils import get_config_hash
 from seqbench.seq_dataset import PadSequence
 from seqbench.dataset import create_base_dataset_from_config
 
-# symseq
-from symseq.seqwrapper import SeqWrapper
+# symseq (via SeqBench's centralized boundary)
+from seqbench.sources import build_symseq_source
 
 from matplotlib import pyplot as plt
 
@@ -235,9 +235,7 @@ if __name__ == "__main__":
     # seq_dataset = create_seq_dataset_from_config(config, 'train')
 
     # symseq
-    # sw = SeqWrapper.from_config(os.path.join("examples", "configs", "example.toml"))
-    sw = SeqWrapper.from_dict(config)
-    generator = sw.generator
+    source = build_symseq_source(config["symseq"]["generator"])
 
     seqbench_config = prepare_config(config["seqbench"])
     seed = seqbench_config["seed"]
@@ -246,7 +244,7 @@ if __name__ == "__main__":
     seqbench_config["config_file_path"] = args["config"]
 
     # base dataset
-    kwargs = {"alphabet_size": config["symseq"]["generator"]["constraints"]["alphabet_size"]}
+    kwargs = {"alphabet_size": len(source.alphabet)}
     base_dataset = create_base_dataset_from_config(seqbench_config, "train", **kwargs)
 
     config_hash = get_config_hash(config)
@@ -258,7 +256,7 @@ if __name__ == "__main__":
 
     seq_dataset = SeqDataset(
         config=seqbench_config,
-        generator=generator,
+        generator=source,
         base_dataset=base_dataset,
         is_train=True,
         pad_index=-1,

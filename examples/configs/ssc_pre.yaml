@@ -1,57 +1,51 @@
-################################################################################
-###                                 SymSeq                                   ###
-################################################################################
+dataset:
+  seed: 42
+  alphabet:
+    size: 4
+    eos: "#"
+  trial_length:
+    min: 1
+    max: 20
+  splits:
+    train: 100
+    test: 100
+
 symseq:
-  ################################################################################
-  # Generator
-  ################################################################################
   generator:
     type: "ArtificialGrammar"
-    mode: "random"  # "preset" | "random" | "custom"
-    seed: 42
-    constraints:
+    mode: "random"
+    params:
       label: "Constrained Random Grammar"
-      alphabet_size: 4
       ambiguities: 2
       ambiguity_depth: 2
       n_start_states: 1
       transition_density: 0.25
       assume_equiprobable: true
-      min_string_length: 1
-      eos: "#"
+  tasks:
+    - {name: "next_token", type: "NStepPrediction", params: {n: 1}}
 
-
-################################################################################
-###                                 SeqBench                                 ###
-################################################################################
 seqbench:
-    
-    seed: 42
-    mode: "file"  # "offline", "online" or "file"
-    amplitude: 10
-    prob_generator_type: "restricted"
-
-    data_generation:
-        train_size: 100
-        test_size: 100
-        seq_len_min: 1
-        seq_len_max: 20
-        combine_sequences: True  # concatenate sequences
-        combined_seq_length: 20  # padding
-        regenerate: False
-        output_dir: 'data/SeqBench'
-
-    input_mapping:
-        base: "ssc"
-    inp_size: 700
-    max_time: 1.4
-    nb_steps: 140
-        spatial_bin_size: 5
-        base_dataset_path: 'datasets/SSC'
-
+  mode: "file"
+  prob_generator_type: "restricted"
+  storage:
+    path: "data/SeqBench"
+    force_rebuild: false
+  composition:
+    combine_sequences: true
+    sample_length: 20
     gap_profile:
-        start: 0
-        duration:
-            dist: "uniform"
-            params: {low: 5, high: 5}
-        dt: 0.1
+      start: 0
+      duration: {dist: "uniform", params: {low: 5, high: 5}}
+      dt: 0.1
+  input_mapping:
+    base: "ssc"
+    base_params:
+      inp_size: 700
+      max_time: 1.4
+      nb_steps: 140
+      spatial_bin_size: 5
+      base_dataset_path: "datasets/SSC"
+    transforms: []
+  task:
+    source: "symseq"
+    name: "next_token"

@@ -75,20 +75,40 @@ def _normalize_params(params):
     return normalized
 
 
-def compose_transforms_from_config(config):
+def compose_transforms_from_config(config_or_input_mapping):
     """
     Create a Compose object from the transforms defined in the config.
-    Supports dotted paths (e.g., "tonic.transforms.ToFrame") and functions (wrapped in FunctionalTransform).
-    """
-    if "transforms" not in config["input_mapping"]:
-        return None
-    
-    transforms_dict = config["input_mapping"]["transforms"]
-    transforms = []
+    Supports dotted paths (e.g., "tonic.transforms.ToFrame") and functions
+    (wrapped in FunctionalTransform).
 
-    for name, params in transforms_dict.items():
-        params = _normalize_params(params)
-        
+    Accepts either an :class:`~seqbench.config.InputMappingCfg` (new path,
+    list-of-dicts format) or a legacy ``Config`` object with an
+    ``input_mapping`` key (old path, name→params dict format).
+    """
+    # New path: InputMappingCfg passed directly (has .transforms as a dataclass field).
+    if hasattr(config_or_input_mapping, 'transforms'):
+        transforms_spec = config_or_input_mapping.transforms  # list[dict]
+        if not transforms_spec:
+            return None
+        # [{name: "ExpandDim", axis: 1, ...}, ...] → [(name, {axis: 1, ...}), ...]
+        items = [
+            (t['name'], {k: v for k, v in t.items() if k != 'name'})
+            for t in transforms_spec
+        ]
+    else:
+        # Old path: full Config with input_mapping key.
+        inp_map = config_or_input_mapping["input_mapping"]
+        if "transforms" not in inp_map or inp_map["transforms"] is None:
+            return None
+        transforms_dict = inp_map["transforms"]
+        if not transforms_dict:
+            return None
+        items = list(transforms_dict.items())
+
+    transforms = []
+    for name, params in items:
+        params = _normalize_params(params or {})
+
         try:
             # Handle dotted paths (e.g., "tonic.transforms.ToFrame")
             if "." in name:
@@ -97,7 +117,7 @@ def compose_transforms_from_config(config):
                 obj = getattr(module, parts[-1])
             else:
                 obj = globals()[name]
-            
+
             # Wrap functions, instantiate classes
             if inspect.isclass(obj):
                 t = obj(**params)
@@ -105,10 +125,10 @@ def compose_transforms_from_config(config):
                 t = FunctionalTransform(obj, **params)
             else:
                 raise ValueError(f"{name} is not callable")
-                
+
         except Exception as e:
             raise RuntimeError(f"Could not create transform {name} with params {params}") from e
-        
+
         transforms.append(t)
 
     return Compose(transforms)

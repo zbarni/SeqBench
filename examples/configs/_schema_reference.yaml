@@ -1,0 +1,96 @@
+# Reference template for the new SeqBench + symseq config schema.
+# Every field is shown with comments. Real configs should omit defaults.
+#
+# Top-level sections:
+#   dataset   — REQUIRED. Shared symbolic-level properties.
+#   symseq    — Optional. Present when symseq is generating trials.
+#   seqbench  — Optional. Present when SeqBench is encoding / persisting.
+#
+# Valid section combos (see schema.OperatingMode):
+#   {dataset, symseq}            → symseq-only
+#   {dataset, symseq, seqbench}  → symseq + seqbench
+#   {dataset, seqbench}          → seqbench standalone
+
+################################################################################
+# dataset — shared symbolic-level properties
+################################################################################
+dataset:
+  seed: 42                       # default seed; both halves inherit unless overridden
+  alphabet:
+    size: 4                      # |Σ| excluding EOS
+    eos: "#"                     # EOS marker; null to disable
+  trial_length:                  # length of an individual symseq Trial
+    min: 1
+    max: 20
+    distribution: "uniform"      # how lengths are drawn per trial
+  splits:                        # named splits; int = count, float in (0,1] = fraction
+    train: 100
+    test: 100
+
+################################################################################
+# symseq — how the symbolic sequences are produced (omit for seqbench-standalone)
+################################################################################
+symseq:
+  seed: null                     # optional local override of dataset.seed
+
+  generator:
+    type: "ArtificialGrammar"    # registered name (ArtificialGrammar, NBack, Dyck, ...)
+    mode: "random"               # AG-only: "random" | "preset" | "custom" (default "random")
+    params:                      # construction kwargs; meaning keyed by mode for AG
+      label: "Constrained Random Grammar"
+      ambiguities: 2
+      ambiguity_depth: 2
+      n_start_states: 1
+      n_terminal_states: null
+      transition_density: 0.25
+      assume_equiprobable: true
+      # alphabet_size / eos inherited from dataset.alphabet (skipped when mode=preset)
+    trial_params: {}             # per-call kwargs to generate_trial();
+                                 # length bounds inherited from dataset.trial_length
+
+  tasks:                         # multiple trial-level annotations
+    - {name: "next_token",  type: "NStepPrediction", params: {n: 1}}
+    # - {name: "3_step_pred", type: "NStepPrediction", params: {n: 3}}
+    # - {name: "mem_2",      type: "NStepMemory",     params: {n: 2}}
+    # - {name: "trigram",    type: "NGramChunk",      params: {n: 3}}
+
+  storage:                       # optional; only relevant in symseq-only mode
+    path: "data/symseq"
+    format: "pickle"             # only "pickle" supported for now
+
+################################################################################
+# seqbench — how trials are turned into model-ready inputs (omit for symseq-only)
+################################################################################
+seqbench:
+  seed: null                     # optional local override of dataset.seed
+  mode: "file"                   # "file" | "offline" | "online"
+  prob_generator_type: "restricted"
+
+  storage:
+    path: "data/SeqBench"
+    force_rebuild: false         # rebuild even on cache hit
+    cache_key: null              # auto-derived from config hash if null
+
+  composition:
+    combine_sequences: true      # concatenate trials into one sample
+    sample_length: 20            # length of one training sample after concatenation
+    gap_profile:
+      start: 0
+      duration: {dist: "uniform", params: {low: 5, high: 5}}
+      add_nongramm_gap: false
+      dt: 0.1
+
+  input_mapping:
+    base: "one_hot"              # one_hot | gsc | shd | ssc | dvsgesture | ...
+    base_params: {}              # base-specific knobs (inp_size, base_dataset_path, ...)
+    transforms: []               # ordered list of {name, params}
+
+  task:                          # single training target — exactly one of (A) or (B)
+    # (A) pointer into symseq.tasks
+    source: "symseq"             # "symseq" | "seqbench"
+    name: "next_token"           # must match one of symseq.tasks[*].name
+
+    # (B) seqbench-derived
+    # source: "seqbench"
+    # type: "Classification"     # name from seqbench.tasks registry
+    # params: {label_source: "base"}

@@ -84,8 +84,13 @@ class RestrictedTargetProbGenerator:
 
     def read_transitions_from_generator(self, generator):
         print(f"Loading transitions from generator!")
+        if not hasattr(generator.source, "transitions"):
+            raise AttributeError(
+                "read_transitions_from_generator requires a grammar source "
+                "with a `.transitions` attribute (e.g. ArtificialGrammar)."
+            )
         transitions = {}
-        for transition in generator.sequencer.transitions:
+        for transition in generator.source.transitions:
             s_from = transition[0]
             s_to = transition[1]
             prob = transition[2]
@@ -424,5 +429,5 @@ class DatasetGenerator:
         """Write transition data to file."""
         print(f"Writing transitions!")
         with open(os.path.join(self.output_dir, "transitions"), "w") as file:
-            for transition in self.seq_generator.sequencer.transitions:
+            for transition in self.seq_generator.source.transitions:
                 file.write(f"{transition[0]}, {transition[1]}, {float(transition[2])}\n")
