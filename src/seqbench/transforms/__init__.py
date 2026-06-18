@@ -75,35 +75,25 @@ def _normalize_params(params):
     return normalized
 
 
-def compose_transforms_from_config(config_or_input_mapping):
+def compose_transforms_from_config(input_mapping):
     """
-    Create a Compose object from the transforms defined in the config.
-    Supports dotted paths (e.g., "tonic.transforms.ToFrame") and functions
-    (wrapped in FunctionalTransform).
+    Create a Compose object from the transforms defined in an
+    :class:`~seqbench.config.InputMappingCfg`.
 
-    Accepts either an :class:`~seqbench.config.InputMappingCfg` (new path,
-    list-of-dicts format) or a legacy ``Config`` object with an
-    ``input_mapping`` key (old path, name→params dict format).
+    Supports dotted paths (e.g., "tonic.transforms.ToFrame") and plain
+    callables (wrapped in :class:`FunctionalTransform`).
+
+    Returns ``None`` if no transforms are configured.
     """
-    # New path: InputMappingCfg passed directly (has .transforms as a dataclass field).
-    if hasattr(config_or_input_mapping, 'transforms'):
-        transforms_spec = config_or_input_mapping.transforms  # list[dict]
-        if not transforms_spec:
-            return None
-        # [{name: "ExpandDim", axis: 1, ...}, ...] → [(name, {axis: 1, ...}), ...]
-        items = [
-            (t['name'], {k: v for k, v in t.items() if k != 'name'})
-            for t in transforms_spec
-        ]
-    else:
-        # Old path: full Config with input_mapping key.
-        inp_map = config_or_input_mapping["input_mapping"]
-        if "transforms" not in inp_map or inp_map["transforms"] is None:
-            return None
-        transforms_dict = inp_map["transforms"]
-        if not transforms_dict:
-            return None
-        items = list(transforms_dict.items())
+    transforms_spec = input_mapping.transforms  # list[dict] with a 'name' key each
+    if not transforms_spec:
+        return None
+
+    # [{name: "ExpandDim", axis: 1, ...}, ...] → [(name, {axis: 1, ...}), ...]
+    items = [
+        (t['name'], {k: v for k, v in t.items() if k != 'name'})
+        for t in transforms_spec
+    ]
 
     transforms = []
     for name, params in items:

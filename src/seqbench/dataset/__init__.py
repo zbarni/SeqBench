@@ -13,37 +13,52 @@ from configuration files. Supported datasets include:
 - Tonic datasets (DVSGesture, NMNIST, etc.)
 """
 
-import os
+import warnings
+
 from seqbench.dataset.shd_ssc import SpikingDataset
 from seqbench.dataset.speech_commands import SpeechCommands
 from seqbench.dataset.synthetic import OneHot
 from seqbench.dataset.tonic_wrapper import TonicDatasetWrapper, TONIC_DATASET_REGISTRY
 
 
-def create_base_dataset_from_config(config_or_input_mapping, split, **kwargs):
-    """
-    Factory function to create a base dataset from configuration.
+def _warn_native_dt_mismatch(base, nb_steps, max_time, dt):
+    """Warn if the global grid ``dt`` differs from a spiking dataset's native dt.
 
-    Accepts either an :class:`~seqbench.config.InputMappingCfg` (new path) or
-    a legacy ``Config`` object with an ``input_mapping`` key (old path).
+    SHD/SSC bin spikes over ``max_time`` into ``nb_steps`` bins, fixing their
+    native resolution at ``max_time / nb_steps``. Under the single real-time
+    axis the global ``dt`` should match this; resampling is a future step, so
+    for now we only surface the mismatch.
+    """
+    if dt is None or not nb_steps:
+        return
+    native_dt = max_time / nb_steps
+    if abs(native_dt - dt) > 1e-9:
+        warnings.warn(
+            f"{base!r} has a native dt of {native_dt:g}s "
+            f"(max_time={max_time}/nb_steps={nb_steps}) but seqbench.dt={dt:g}s. "
+            "These stimuli are not resampled to the global grid; the time axis "
+            "will be inconsistent until dt matches the native resolution.",
+            stacklevel=2,
+        )
+
+
+def create_base_dataset_from_config(input_mapping, split, dt=None, **kwargs):
+    """
+    Factory function to create a base dataset from an
+    :class:`~seqbench.config.InputMappingCfg`.
 
     Args:
-        config_or_input_mapping: InputMappingCfg or legacy Config
-        split: Dataset split ('train' or 'test')
-        **kwargs: Additional keyword arguments (e.g. ``alphabet_size`` for one_hot)
+        input_mapping: :class:`~seqbench.config.InputMappingCfg` instance.
+        split: Dataset split ('train' or 'test').
+        dt: Global grid resolution in seconds (``seqbench.dt``). Used to convert
+            ``base_params.duration`` (seconds) into a stimulus step count for
+            one_hot, and to validate spiking datasets' native resolution.
+        **kwargs: Additional keyword arguments (e.g. ``alphabet_size`` for one_hot).
     """
-    # New path: InputMappingCfg passed directly (has .base as a dataclass field).
-    if hasattr(config_or_input_mapping, 'base'):
-        return _create_from_input_mapping_cfg(config_or_input_mapping, split, **kwargs)
-    # Old path: full Config with input_mapping key.
-    return _create_from_legacy_config(config_or_input_mapping, split, **kwargs)
+    bp = input_mapping.base_params  # plain dict of base-specific parameters
 
-
-def _create_from_input_mapping_cfg(inp, split, **kwargs):
-    """New path — inp is an InputMappingCfg; extra fields are in inp.base_params."""
-    bp = inp.base_params  # plain dict
-
-    if inp.base == "shd":
+    if input_mapping.base == "shd":
+        _warn_native_dt_mismatch("shd", bp["nb_steps"], bp["max_time"], dt)
         return SpikingDataset(
             "shd",
             bp["base_dataset_path"],
@@ -52,7 +67,8 @@ def _create_from_input_mapping_cfg(inp, split, **kwargs):
             max_time=bp["max_time"],
             num_bins=bp.get("num_bins", 1),
         )
-    if inp.base == "ssc":
+    if input_mapping.base == "ssc":
+        _warn_native_dt_mismatch("ssc", bp["nb_steps"], bp["max_time"], dt)
         return SpikingDataset(
             "ssc",
             bp["base_dataset_path"],
@@ -61,78 +77,31 @@ def _create_from_input_mapping_cfg(inp, split, **kwargs):
             max_time=bp["max_time"],
             num_bins=bp.get("num_bins", 1),
         )
-    if inp.base == "gsc":
+    if input_mapping.base == "gsc":
         split = "training" if split == "train" else "testing"
         return SpeechCommands(
             data_folder=bp["base_dataset_path"],
             split=split,
             return_raw=bp.get("return_raw", False),
         )
-    if inp.base == "one_hot":
+    if input_mapping.base == "one_hot":
         if "alphabet_size" not in kwargs:
             raise ValueError("alphabet_size must be provided for one_hot dataset!")
-        return OneHot(kwargs["alphabet_size"] + 1)
-    if inp.base.lower() in TONIC_DATASET_REGISTRY:
-        canonical_name = TONIC_DATASET_REGISTRY[inp.base.lower()]
+        # Stimulus footprint = round(duration / dt) steps. Without a global dt
+        # (legacy callers) fall back to a single timestep. ``duration`` defaults
+        # to ``dt`` so an unspecified stimulus is exactly one step.
+        if dt is not None:
+            duration = bp.get("duration", dt)
+            n_steps = max(1, round(duration / dt))
+        else:
+            n_steps = 1
+        return OneHot(kwargs["alphabet_size"] + 1, n_steps=n_steps)
+    if input_mapping.base.lower() in TONIC_DATASET_REGISTRY:
+        canonical_name = TONIC_DATASET_REGISTRY[input_mapping.base.lower()]
         return TonicDatasetWrapper(
             dataset_name=canonical_name,
             root=bp["base_dataset_path"],
             split=split,
             **{k: v for k, v in bp.items() if k != "base_dataset_path"},
         )
-    raise ValueError(f"Unknown input encoding: {inp.base!r}")
-
-
-def _create_from_legacy_config(config, split, **kwargs):
-    """Old path — config is a full Config with an input_mapping key."""
-    inp_map_config = config["input_mapping"]
-    if inp_map_config["base"] == "shd":
-        return SpikingDataset(
-            "shd",
-            inp_map_config["base_dataset_path"],
-            split,
-            nb_steps=inp_map_config["nb_steps"],
-            max_time=inp_map_config["max_time"],
-            num_bins=inp_map_config["num_bins", 1],
-        )
-    if inp_map_config["base"] == "ssc":
-        return SpikingDataset(
-            "ssc",
-            inp_map_config["base_dataset_path"],
-            split,
-            nb_steps=inp_map_config["nb_steps"],
-            max_time=inp_map_config["max_time"],
-            num_bins=inp_map_config["num_bins", 1],
-        )
-    elif inp_map_config["base"] == "gsc":
-        if split == "train":
-            split = "training"
-        else:
-            split = "testing"
-
-        method = "mfcc"
-        if "base_params" in inp_map_config and "method" in inp_map_config["base_params"]:
-            method = inp_map_config["base_params"]["method"]
-
-        return SpeechCommands(
-            data_folder=os.path.join(inp_map_config["base_dataset_path"]),
-            split=split,
-            return_raw=inp_map_config["return_raw", False],
-        )
-    elif inp_map_config["base"] == "one_hot":
-        if "alphabet_size" not in kwargs:
-            raise ValueError("alphabet_size must be provided for one_hot dataset!")
-        return OneHot(kwargs["alphabet_size"] + 1)
-    elif inp_map_config["base"].lower() in TONIC_DATASET_REGISTRY:
-        dataset_name_lower = inp_map_config["base"].lower()
-        canonical_name = TONIC_DATASET_REGISTRY[dataset_name_lower]
-        root = inp_map_config["base_dataset_path"]
-        base_params = inp_map_config.get("base_params", {})
-        return TonicDatasetWrapper(
-            dataset_name=canonical_name,
-            root=root,
-            split=split,
-            **base_params
-        )
-    else:
-        raise ValueError(f"Unknown input encoding!")
+    raise ValueError(f"Unknown input encoding: {input_mapping.base!r}")

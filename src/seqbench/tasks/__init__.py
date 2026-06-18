@@ -10,7 +10,7 @@ Naming mirrors ``symseq.tasks`` so a config can swap
 """
 
 from seqbench.tasks.base import Target, Task
-from seqbench.tasks.classify import Classification
+from seqbench.tasks.classify import Classification, StateClassification
 from seqbench.tasks.shift import NStepMemory, NStepPrediction
 
 __all__ = [
@@ -19,4 +19,5 @@ __all__ = [
     "NStepMemory",
     "NStepPrediction",
     "Classification",
+    "StateClassification",
 ]

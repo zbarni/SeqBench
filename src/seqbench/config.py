@@ -17,6 +17,7 @@ NOT touch disk. Those steps belong to the loader that consumes a parsed
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -100,6 +101,24 @@ class DatasetCfg:
                     f"dataset.splits[{name!r}] int must be >= 0, got {value!r}"
                 )
 
+    def split_size(self, name: str, total: int | None = None) -> int:
+        """Return the absolute sample count for a named split.
+
+        If the stored value is already an int it is returned directly.
+        If it is a float fraction, *total* must be provided; the result is
+        ``round(fraction * total)``.  Passing no *total* for a fractional split
+        raises ``TypeError`` rather than silently truncating to 0.
+        """
+        value = self.splits[name]
+        if isinstance(value, float):
+            if total is None:
+                raise TypeError(
+                    f"dataset.splits[{name!r}] is a fraction ({value!r}) — "
+                    "provide a total sample count to resolve it"
+                )
+            return round(value * total)
+        return value
+
 
 # ----------------------------- symseq -----------------------------------------
 
@@ -177,7 +196,6 @@ class GapProfileCfg:
     start: int = 0
     duration: dict[str, Any] = field(default_factory=dict)
     add_nongramm_gap: bool = False
-    dt: float = 0.1
 
 
 @dataclass
@@ -246,12 +264,18 @@ class SeqbenchCfg:
     task: SeqbenchTaskCfg
     seed: int | None = None
     prob_generator_type: str = "restricted"
+    # Global grid resolution in seconds. Single source of truth shared by the
+    # encoding (stimulus duration -> steps) and the gap profile (gap seconds ->
+    # steps). See input_mapping.base_params.duration and gap_profile.duration.
+    dt: float = 0.1
 
     def __post_init__(self) -> None:
         if self.mode not in ("file", "offline", "online"):
             raise ValueError(
                 f"seqbench.mode must be 'file' | 'offline' | 'online', got {self.mode!r}"
             )
+        if not isinstance(self.dt, (int, float)) or self.dt <= 0:
+            raise ValueError(f"seqbench.dt must be a positive number, got {self.dt!r}")
 
 
 # ----------------------------- root -------------------------------------------
@@ -356,7 +380,29 @@ def _parse_seqbench(raw: dict) -> SeqbenchCfg:
     )
     storage = SeqbenchStorageCfg(**raw["storage"])
     comp_raw = dict(raw["composition"])
-    gp_raw = comp_raw.pop("gap_profile", None)
+    gp_raw = dict(comp_raw.pop("gap_profile", None) or {}) or None
+
+    # Resolve the global grid resolution `dt`. Canonical home is seqbench.dt.
+    # Back-compat: lift a legacy gap_profile.dt up to seqbench.dt (deprecated).
+    dt = raw.get("dt")
+    if gp_raw is not None and "dt" in gp_raw:
+        legacy_dt = gp_raw.pop("dt")
+        if dt is None:
+            warnings.warn(
+                "gap_profile.dt is deprecated; move it to the top-level seqbench.dt. "
+                f"Using gap_profile.dt={legacy_dt!r} as seqbench.dt.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            dt = legacy_dt
+        else:
+            warnings.warn(
+                "Both seqbench.dt and the deprecated gap_profile.dt are set; "
+                f"ignoring gap_profile.dt={legacy_dt!r} in favor of seqbench.dt={dt!r}.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
     composition = CompositionCfg(
         **comp_raw,
         gap_profile=GapProfileCfg(**gp_raw) if gp_raw else None,
@@ -371,6 +417,7 @@ def _parse_seqbench(raw: dict) -> SeqbenchCfg:
         task=task,
         seed=raw.get("seed"),
         prob_generator_type=raw.get("prob_generator_type", "restricted"),
+        dt=dt if dt is not None else SeqbenchCfg.dt,
     )
 
 

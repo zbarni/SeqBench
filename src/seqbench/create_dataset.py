@@ -22,7 +22,9 @@ from seqbench import config as cfg_mod
 from seqbench.seq_dataset import DatasetGenerator
 from seqbench.utils import get_config_hash
 from seqbench.seq_utils.generator import SequenceGenerator
+from seqbench.dataset_generator import RestrictedTargetProbGenerator
 from seqbench.sources import build_symseq_source
+from seqbench.tasks.target_builder import make_task_target_builder
 
 __script_name__ = os.path.basename(__file__)
 
@@ -45,30 +47,44 @@ if __name__ == '__main__':
     assert run_cfg.symseq is not None, "config must contain a 'symseq' section"
 
     seed = run_cfg.dataset.seed
-    train_size = int(run_cfg.dataset.splits['train'])
-    test_size = int(run_cfg.dataset.splits['test'])
+    train_size = run_cfg.dataset.split_size('train')
+    test_size = run_cfg.dataset.split_size('test')
     output_dir = run_cfg.seqbench.storage.path
 
-    source = build_symseq_source(run_cfg.symseq.generator)
+    source = build_symseq_source(run_cfg)
 
-    seq_generator = SequenceGenerator(
-        source,
-        seq_len_min=run_cfg.dataset.trial_length.min,
-        seq_len_max=run_cfg.dataset.trial_length.max,
-        combine_sequences=run_cfg.seqbench.composition.combine_sequences,
-        combined_seq_len=run_cfg.seqbench.composition.sample_length,
-        seed=seed,
-    )
+    def build_seq_generator():
+        """Construct a SequenceGenerator with the configured task builder wired in.
+
+        The builder resolves and serializes the training target per sample; a
+        transition-loaded prob generator is supplied so grammar-dependent tasks
+        (e.g. StateClassification) can resolve at draw time.
+        """
+        gen = SequenceGenerator(
+            source,
+            seq_len_min=run_cfg.dataset.trial_length.min,
+            seq_len_max=run_cfg.dataset.trial_length.max,
+            combine_sequences=run_cfg.seqbench.composition.combine_sequences,
+            combined_seq_len=run_cfg.seqbench.composition.sample_length,
+            seed=seed,
+            trial_params=run_cfg.symseq.generator.trial_params,
+        )
+        prob_gen = None
+        if hasattr(source, "transitions"):
+            prob_gen = RestrictedTargetProbGenerator()
+            prob_gen.read_transitions_from_generator(gen)
+        gen.task_builder = make_task_target_builder(run_cfg, source, prob_generator=prob_gen)
+        return gen
 
     # Creating training dataset
     random.seed(seed)
     np.random.seed(seed)
 
     config_hash = get_config_hash(run_cfg, dataset_size=train_size)
-    dataset_root = f'{output_dir}-{config_hash}'
+    dataset_root = os.path.join(output_dir, config_hash)
 
     dataset_generator = DatasetGenerator(
-        seq_generator,
+        build_seq_generator(),
         dataset_size=train_size,
         output_dir=dataset_root,
         config_file_path=args['config'],
@@ -82,19 +98,10 @@ if __name__ == '__main__':
     np.random.seed(seed)
 
     config_hash = get_config_hash(run_cfg, dataset_size=test_size)
-    dataset_root = f'{output_dir}-{config_hash}'
-
-    seq_generator = SequenceGenerator(
-        source,
-        seq_len_min=run_cfg.dataset.trial_length.min,
-        seq_len_max=run_cfg.dataset.trial_length.max,
-        combine_sequences=run_cfg.seqbench.composition.combine_sequences,
-        combined_seq_len=run_cfg.seqbench.composition.sample_length,
-        seed=seed,
-    )
+    dataset_root = os.path.join(output_dir, config_hash)
 
     dataset_generator = DatasetGenerator(
-        seq_generator,
+        build_seq_generator(),
         dataset_size=test_size,
         output_dir=dataset_root,
         config_file_path=args['config'],

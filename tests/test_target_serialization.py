@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025-present, SeqBench Contributors
+
+"""Phase 2: GeneratorSample targets survive the file-mode serialization round-trip.
+
+The on-disk format gains a 4th ``::targets`` (JSON) field; legacy 3-field lines
+parse back with ``targets=None``.
+"""
+
+import io
+
+import numpy as np
+import pytest
+
+from seqbench.dataset_generator import DatasetGenerator
+from seqbench.seq_utils.generator import GeneratorSample
+from seqbench.tasks.base import Target
+
+
+def _roundtrip(gs):
+    buf = io.StringIO()
+    DatasetGenerator.write_gensample_to_file(buf, gs)
+    line = buf.getvalue().rstrip("\n")
+    return DatasetGenerator.create_gensample_from_str(line)
+
+
+def test_roundtrip_no_targets():
+    gs = GeneratorSample(np.array([1, 2, 0]), np.array(["a", "b", "#"], dtype=object), 3)
+    out = _roundtrip(gs)
+    assert out.class_seq == [1, 2, 0]
+    assert out.state_seq == ["a", "b", "#"]
+    assert out.targets is None
+
+
+def test_roundtrip_per_token_targets_with_none_and_mask():
+    gs = GeneratorSample(
+        np.array([1, 2, 3, 0]),
+        np.array(["a", "b", "c", "#"], dtype=object),
+        4,
+        targets={
+            "next_token": Target(
+                values=[2, 3, 0, None], mask=[True, True, True, False], kind="per_token"
+            )
+        },
+    )
+    out = _roundtrip(gs)
+    t = out.targets["next_token"]
+    assert t.kind == "per_token"
+    assert t.values == [2, 3, 0, None]
+    assert t.mask == [True, True, True, False]
+
+
+def test_roundtrip_numpy_values():
+    gs = GeneratorSample(
+        np.array([1, 0]),
+        np.array(["a", "#"], dtype=object),
+        2,
+        targets={"t": Target(values=list(np.array([5, 0])), mask=[True, True], kind="per_token")},
+    )
+    out = _roundtrip(gs)
+    assert out.targets["t"].values == [5, 0]
+
+
+def test_legacy_three_field_line_parses_with_no_targets():
+    legacy = "[1, 2, 0]::['a', 'b', '#']::3"
+    out = DatasetGenerator.create_gensample_from_str(legacy)
+    assert out.class_seq == [1, 2, 0]
+    assert out.targets is None
+
+
+def test_roundtrip_nback_intrinsic_targets():
+    symseq = pytest.importorskip("symseq")
+    from symseq.generators.nback import NBack
+    from seqbench.seq_utils.generator import SequenceGenerator
+
+    gen = SequenceGenerator(
+        NBack(n=2, seq_length=8, alphabet_size=5, seed=1),
+        seq_len_min=1,
+        seq_len_max=50,
+        combine_sequences=False,
+        combined_seq_len=20,
+        seed=3,
+    )
+    gs = gen.generate(idx=1, compute_length=True)
+    assert gs.targets is not None
+    out = _roundtrip(gs)
+    assert set(out.targets) == set(gs.targets)
+    for name in gs.targets:
+        assert out.targets[name].values == gs.targets[name].values
+        assert out.targets[name].mask == gs.targets[name].mask
+        assert out.targets[name].kind == gs.targets[name].kind

@@ -12,9 +12,13 @@ training targets (modulo the symbols-vs-class_ids representation).
 
 from __future__ import annotations
 
-from seqbench.seq_utils.generator import GeneratorSample
+from typing import TYPE_CHECKING
+
 from seqbench.tasks.base import Target, Task
 from seqbench.tasks.registry import register
+
+if TYPE_CHECKING:
+    from seqbench.seq_utils.generator import GeneratorSample
 
 
 @register("NStepMemory")
@@ -23,6 +27,9 @@ class NStepMemory(Task):
 
     Positions ``[0..n-1]`` are masked.
     """
+
+    kind = "per_token"
+    label_space = "class_id"
 
     def __init__(self, n: int):
         if not isinstance(n, int) or n < 1:
@@ -46,6 +53,9 @@ class NStepPrediction(Task):
 
     Last ``n`` positions are masked.
     """
+
+    kind = "per_token"
+    label_space = "class_id"
 
     def __init__(self, n: int):
         if not isinstance(n, int) or n < 1:

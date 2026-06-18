@@ -12,7 +12,6 @@ temporal processing, and various sequence tasks.
 # Standard library imports
 import os
 import logging
-from math import ceil
 from dataclasses import dataclass
 from typing import Optional, Any
 
@@ -24,10 +23,11 @@ import numpy as np
 import tqdm
 
 # Local imports
-from seqbench.utils import get_config_hash
-from seqbench.dataset import create_base_dataset_from_config
 from seqbench.seq_utils.generator import SequenceGenerator
+from seqbench.seq_utils.symbol_encoder import SymbolEncoder
 from seqbench.dataset_generator import DatasetGenerator, RestrictedTargetProbGenerator
+from seqbench.tasks.classify import Classification, StateClassification
+from seqbench.tasks.target_builder import TaskTargetBuilder
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -46,7 +46,6 @@ class _GapProfile:
     gap_prob: float = 1.0
     duration: Any = None  # dict {dist: callable, params: dict} or scalar/None
     add_nongramm_gap: bool = False
-    dt: float = 0.1
     noise: Optional[float] = None
 
 
@@ -85,16 +84,10 @@ class SeqDataset(Dataset):
     - Configurable padding and data augmentation
     - Efficient data loading with optional caching
 
-    Accepts either a :class:`~seqbench.config.RunConfig` (new path — pass
-    ``dataset_size``, ``config_file_path``, and ``do_classify`` explicitly) or
-    the legacy ``Config`` wrapper (old path — those values are read from the
-    config object for backward compatibility with callers not yet migrated).
-
     Attributes:
         base_dataset: Base dataset providing raw sequence data
         is_train: Whether this is a training dataset
         timestep: Temporal resolution for sequence processing
-        do_classify: Whether to perform classification tasks
         pad_index: Index used for sequence padding
         dataset_size: Total number of samples in the dataset
     """
@@ -105,12 +98,10 @@ class SeqDataset(Dataset):
         generator: Any,
         base_dataset: Any,
         is_train: bool,
-        dataset_size: Optional[int] = None,
-        config_file_path: Optional[str] = None,
-        do_classify: Optional[bool] = None,
+        dataset_size: int,
+        config_file_path: Optional[str],
         pad_index: int = -1,
         not_temporal: bool = False,
-        base_duration: Optional[int] = None,
         load_to_tensor: Optional[callable] = None,
         transform: Optional[callable] = None,
         dataset_root: Optional[str] = None,
@@ -119,34 +110,20 @@ class SeqDataset(Dataset):
         Initialize the SeqDataset.
 
         Args:
-            config: :class:`~seqbench.config.RunConfig` (new path) or legacy
-                ``Config`` wrapper (old path).
+            config: :class:`~seqbench.config.RunConfig`.
             generator: Sequence generator / trial source for creating sequences.
             base_dataset: Base dataset providing raw data samples.
             is_train: Whether this is a training dataset.
-            dataset_size: Number of samples to use.  Required when passing a
-                ``RunConfig``; read from the config object on the legacy path.
+            dataset_size: Number of samples to use.
             config_file_path: Path to the YAML config file written into the
-                generated dataset directory.  Required on the RunConfig path.
-            do_classify: Whether to use classification targets.  Required on
-                the RunConfig path; read from the config object on the legacy
-                path.  Will later be derived from the tasks module.
+                generated dataset directory.
             pad_index: Index to use for padding sequences (default: -1).
             not_temporal: If True, treat data as non-temporal (default: False).
-            base_duration: Base duration of samples in timesteps
-                (auto-detected if None).
             load_to_tensor: Optional function to convert data to tensors.
             transform: Optional transform to apply to data samples.
             dataset_root: Root directory for dataset storage (default: None).
         """
-        from seqbench.config import RunConfig
-
-        if isinstance(config, RunConfig):
-            self._init_from_run_cfg(config, dataset_size, config_file_path, do_classify)
-        else:
-            self._init_from_legacy_config(
-                config, dataset_size, config_file_path, do_classify
-            )
+        self._init_from_run_cfg(config, dataset_size, config_file_path)
 
         self.base_dataset = base_dataset
         self.is_train = is_train
@@ -155,11 +132,6 @@ class SeqDataset(Dataset):
         self.dataset_root = dataset_root
         self.pad_index = pad_index
         self.not_temporal = not_temporal  # TODO potentially remove and set dynamically
-
-        if base_duration:
-            self.base_duration = base_duration
-        else:
-            self.base_duration = self.base_dataset[0][0].shape[0]
 
         if load_to_tensor:
             self.load_to_tensor = load_to_tensor
@@ -184,13 +156,24 @@ class SeqDataset(Dataset):
         self.base_shape = self.__get_dynamic_samples_dimensions(base_sample)
 
         # We create the target_prob_generator even for classification
-        # to get the output_dim from the transitions
+        # to get num_classes (unreduced-state count) from the transitions
         if self.prob_generator_type == "restricted":
             self.target_prob_generator = RestrictedTargetProbGenerator()
         else:
             raise ValueError(
                 f"Did not recognize target_prob_generator {self.prob_generator_type}!"
             )
+
+        # The task module is the single source of truth for the training target.
+        # state_id_fn is a bound method: the transition map is populated later
+        # (read from generator/file) and resolved lazily at sample-build time.
+        self.target_builder = TaskTargetBuilder.from_run_cfg(
+            self._run_cfg,
+            encoder=SymbolEncoder(self.generator.alphabet),
+            pad_index=self.pad_index,
+            state_id_fn=self.target_prob_generator.unred_state_to_id,
+        )
+        self._derive_output_structure()
 
         if self.read_from_file:
             if self.__dataset_folder_exists() and not self.regenerate:
@@ -205,32 +188,28 @@ class SeqDataset(Dataset):
         else:
             print("SeqBench: Generating dataset on the fly!")
             self.gs = self.__create_sequence_generator()
-            self.target_prob_generator.read_transitions_from_generator(self.gs)
+            if hasattr(self.generator, "transitions"):
+                self.target_prob_generator.read_transitions_from_generator(self.gs)
 
     # ------------------------------------------------------------------
     # Private initialisation helpers
     # ------------------------------------------------------------------
 
-    def _init_from_run_cfg(self, run_cfg, dataset_size, config_file_path, do_classify):
+    def _init_from_run_cfg(self, run_cfg, dataset_size, config_file_path):
         """Extract all config-derived values from a :class:`~seqbench.config.RunConfig`."""
         from seqbench.utils import parse_gap_duration
 
-        assert (
-            dataset_size is not None
-        ), "dataset_size must be provided when using RunConfig"
-        assert (
-            do_classify is not None
-        ), "do_classify must be provided when using RunConfig"
-
-        self._seed = run_cfg.dataset.seed
+        self._run_cfg = run_cfg
+        seqbench_seed = run_cfg.seqbench.seed if run_cfg.seqbench is not None else None
+        self._seed = seqbench_seed if seqbench_seed is not None else run_cfg.dataset.seed
         self.dataset_size = dataset_size
-        # TODO handle timestamp properly
-        self.timestep = run_cfg.seqbench.input_mapping.base_params.get("timestep", None)
+        # Global grid resolution (seconds/timestep): single source of truth for
+        # converting both stimulus and gap real-time durations into steps.
+        self._dt = run_cfg.seqbench.dt
         self.read_from_file = (
             run_cfg.seqbench.mode == "file"
         )  # TODO self.config['read_from_file']
         self.prob_generator_type = run_cfg.seqbench.prob_generator_type
-        self.do_classify = do_classify
         self.regenerate = run_cfg.seqbench.storage.force_rebuild
         self._config_file_path = config_file_path
         self._input_mapping_base = run_cfg.seqbench.input_mapping.base
@@ -241,6 +220,7 @@ class SeqDataset(Dataset):
         self._seq_len_max = run_cfg.dataset.trial_length.max
         self._combine_sequences = run_cfg.seqbench.composition.combine_sequences
         self._combined_seq_len = run_cfg.seqbench.composition.sample_length
+        self._trial_params = run_cfg.symseq.generator.trial_params if run_cfg.symseq else {}
 
         # Normalise gap profile
         gp_cfg = run_cfg.seqbench.composition.gap_profile
@@ -253,61 +233,49 @@ class SeqDataset(Dataset):
                 gap_prob=1.0,  # not in new schema; always insert gaps
                 duration=duration,
                 add_nongramm_gap=gp_cfg.add_nongramm_gap,
-                dt=gp_cfg.dt,
                 noise=None,  # not in new schema
             )
         else:
             self._gap_profile = None
 
-    def _init_from_legacy_config(
-        self, config, dataset_size, config_file_path, do_classify
-    ):
-        """Extract all config-derived values from a legacy ``Config`` object."""
-        self._seed = config["seed"]
-        self.dataset_size = (
-            dataset_size if dataset_size is not None else config["dataset_size"]
-        )
-        # TODO handle timestamp properly
-        self.timestep = config["input_mapping"].get("timestep", None)
-        self.read_from_file = (
-            config["mode"] == "file"
-        )  # TODO self.config['read_from_file']
-        self.prob_generator_type = config["prob_generator_type"]
-        self.do_classify = (
-            do_classify if do_classify is not None else config["do_classify"]
-        )
-        self.regenerate = config["data_generation"]["regenerate"]
-        self._config_file_path = (
-            config_file_path
-            if config_file_path is not None
-            else config["config_file_path"]
-        )
-        self._input_mapping_base = config["input_mapping"]["base"]
-        self._global_noise = config["noise", 0]
+    def _derive_output_structure(self):
+        """Decide the output path from the configured task.
 
-        # Sequence generator params
-        data_gen = config["data_generation"]
-        self._seq_len_min = data_gen["seq_len_min"]
-        self._seq_len_max = data_gen["seq_len_max"]
-        self._combine_sequences = data_gen["combine_sequences"]
-        self._combined_seq_len = data_gen["combined_seq_length"]
+        - ``is_per_trial``: one label per sample (whole-sequence Classification).
+        - ``_wants_target_probs``: emit the grammar transition distribution —
+          only for a per_token, prediction-like task over a grammar source
+          (not StateClassification, not per_trial).
+        - ``per_token_classify``: the no-target_probs per-token path (derived
+          property — True when not per_trial and not _wants_target_probs).
+        """
+        # With combine_sequences a per_trial task's labels are spread to token
+        # boundaries by __concat_targets, so the effective output is per_token.
+        self.is_per_trial = (
+            self.target_builder.kind == "per_trial"
+            and not self._combine_sequences
+        )
+        self._wants_target_probs = (
+            not self.is_per_trial
+            and self.target_builder.kind == "per_token"
+            and hasattr(self.generator, "transitions")
+            and not isinstance(self.target_builder.task, (Classification, StateClassification))
+        )
 
-        # Normalise gap profile
-        if "gap_profile" in config and config["gap_profile"] is not None:
-            gp = config["gap_profile"]
-            raw_duration = gp["duration"]
-            # Legacy: duration may be a Config wrapping {dist: callable, params: dict}
-            # or a scalar.  Keep as-is — _add_gap_content handles both.
-            self._gap_profile = _GapProfile(
-                start=gp["start", 0],
-                gap_prob=gp["gap_prob", 1],
-                duration=raw_duration,
-                add_nongramm_gap=gp["add_nongramm_gap", False],
-                dt=gp["dt"],
-                noise=gp["noise", None],
-            )
-        else:
-            self._gap_profile = None
+    @property
+    def per_token_classify(self) -> bool:
+        """True for a per-token classification path (no target_probs emitted).
+
+        This is the per-token counterpart to ``is_per_trial``: covers
+        StateClassification and any per-token task over a non-grammar source.
+        Use instead of the removed ``do_classify`` field.
+        """
+        return not self.is_per_trial and not self._wants_target_probs
+
+    @property
+    def is_classification(self):
+        """True when the output is a classification target (per_trial label or
+        per-token state ids), i.e. no target_probs. Used to pick the collate."""
+        return self.is_per_trial or self.per_token_classify
 
     # ------------------------------------------------------------------
     # Private dataset methods
@@ -326,7 +294,9 @@ class SeqDataset(Dataset):
             return False
         if not os.path.isfile(os.path.join(self.dataset_root, "config.yaml")):
             return False
-        if not os.path.isfile(os.path.join(self.dataset_root, "transitions")):
+        if hasattr(self.generator, "transitions") and not os.path.isfile(
+            os.path.join(self.dataset_root, "transitions")
+        ):
             return False
         if self.is_train and not os.path.isfile(
             os.path.join(self.dataset_root, "train")
@@ -347,6 +317,10 @@ class SeqDataset(Dataset):
         """
         print(f"SeqBench: Generating dataset with config {self._config_file_path}!")
         self.gs = self.__create_sequence_generator()
+        # Populate the transition map before generation so tasks that need it at
+        # draw time (e.g. StateClassification) resolve correctly and serialize.
+        if hasattr(self.generator, "transitions"):
+            self.target_prob_generator.read_transitions_from_generator(self.gs)
         dataset_generator = DatasetGenerator(
             self.gs,
             dataset_size=self.dataset_size,
@@ -365,9 +339,10 @@ class SeqDataset(Dataset):
         samples into memory for fast access.
         """
         print(f"SeqBench: Reading dataset from {self.dataset_root}!")
-        self.target_prob_generator.read_transitions_from_file(
-            os.path.join(self.dataset_root, "transitions")
-        )
+        if hasattr(self.generator, "transitions"):
+            self.target_prob_generator.read_transitions_from_file(
+                os.path.join(self.dataset_root, "transitions")
+            )
         self.buffered_samples = self.__buffer_samples_from_file()
 
     def __create_sequence_generator(self):
@@ -384,23 +359,23 @@ class SeqDataset(Dataset):
             combine_sequences=self._combine_sequences,
             combined_seq_len=self._combined_seq_len,
             seed=self._seed,
+            trial_params=self._trial_params,
+            task_builder=self.target_builder,
         )
 
     @property
-    def output_dim(self):
-        """
-        Get the output dimension for the dataset.
+    def num_classes(self):
+        """Number of distinct classes in the configured task's target label space.
 
-        For classification tasks, returns the number of unreduced states.
-        For prediction tasks, returns the number of reduced states.
-
-        Returns:
-            int: Output dimension (number of classes or states).
+        Task-driven (see :meth:`TaskTargetBuilder.num_classes`): the encoder vocab
+        size for class-id targets (prediction / memory / symbolic classification),
+        the grammar's unreduced-state count for StateClassification, or the base
+        dataset's class count for base-label classification.
         """
-        if self.do_classify:
-            return self.target_prob_generator.num_unreduced_states
-        else:
-            return self.target_prob_generator.num_reduced_states
+        return self.target_builder.num_classes(
+            prob_generator=self.target_prob_generator,
+            base_dataset=self.base_dataset,
+        )
 
     def __get_samples_dimensions(self):
         """
@@ -462,17 +437,23 @@ class SeqDataset(Dataset):
             else:
                 delay = gp.duration
 
+        # Single conversion shared by both gap modes: real-time seconds -> grid
+        # steps at the global resolution. This is the same axis the stimulus uses
+        # (stimulus footprint = round(duration / dt)), so stimulus:gap ratios are
+        # preserved across any choice of dt.
+        gap_steps = round(delay / self._dt)
+
         if gp.add_nongramm_gap:
             preds_idx = np.where(
                 self.target_prob_generator.transition_probs[state_idx] == 0
             )[0]
-            delay_dur = 0
-            n_delays = round(delay / (self.base_duration * self.timestep))
-            if len(preds_idx) != 0:
-                delays = []
-                for i in range(n_delays):
+            if gap_steps > 0 and len(preds_idx) != 0:
+                # Fill exactly gap_steps rows with non-grammatical stimuli, using
+                # their actual emitted lengths and truncating the last one so the
+                # filler occupies the same footprint as a zero gap of equal delay.
+                accumulated = 0
+                while accumulated < gap_steps:
                     idx = self.rng.choice(preds_idx)
-
                     if self._input_mapping_base == "one_hot":
                         delay_idx = self.base_dataset.class_dict[idx]
                     else:
@@ -480,19 +461,25 @@ class SeqDataset(Dataset):
                             self.rng.choice(self.base_dataset.class_dict[idx])
                         )
 
-                    delay_content = self.base_dataset[delay_idx][0]
-                    delay_content = reshape(delay_content)
-                    delays.append(delay_content)
-                    delay_dur += delay_content.shape[0]
-
-                gap_items.extend(delays)
+                    delay_content = reshape(self.base_dataset[delay_idx][0])
+                    remaining = gap_steps - accumulated
+                    if delay_content.shape[0] > remaining:
+                        delay_content = delay_content[:remaining]
+                    if delay_content.shape[0] == 0:
+                        # Degenerate (empty) stimulus: pad the remainder with
+                        # zeros rather than loop forever.
+                        gap_items.append(
+                            torch.zeros([remaining] + list(self.base_shape))
+                        )
+                        break
+                    gap_items.append(delay_content)
+                    accumulated += delay_content.shape[0]
             else:
-                delay_content = torch.zeros([delay_dur] + list(self.base_shape))
-                gap_items.append(delay_content)
+                # No non-grammatical predecessors (or zero gap): fall back to a
+                # zero gap of the same real-time footprint.
+                gap_items.append(torch.zeros([gap_steps] + list(self.base_shape)))
         else:
-            delay_dur = ceil(delay / gp.dt)
-            delay_content = torch.zeros([delay_dur] + list(self.base_shape))
-            gap_items.append(delay_content)
+            gap_items.append(torch.zeros([gap_steps] + list(self.base_shape)))
 
         if gp.noise is not None and not gp.add_nongramm_gap:
             for i, gap_item in enumerate(gap_items):
@@ -536,18 +523,30 @@ class SeqDataset(Dataset):
         return self.dataset_size
 
     def __getitem__(self, idx):
-        """
-        Returns an element of SeqBench. Since we do not need transition probabilities in case of
-        classification, a returned element differs between classification and prediction.
-        However, the only difference is that no target probabilities are provided
-        (and the content of target_seq of course).
-        Prediction: [input_seq, target_seq, class_seq, target_prob_seq]
-        Classification: [input_seq, target_seq, class_seq], where:
-        - input_seq has shape (T, J)
-        - target_seq has shape (T, 1)
-        - class_seq has shape (T, 1)
-        - target_prob_seq has shape (T, C) (C is the number of ambiguous states)
-        Note: class_seq is not needed and only provided for debugging.
+        """Build one dataset item from sample ``idx``.
+
+        The configured task owns the target *values* (``sample.target_seq``,
+        produced by :class:`~seqbench.tasks.target_builder.TaskTargetBuilder`).
+        This method handles the embedding assembly, optional gap insertion, the
+        per-element -> per-timestep target broadcast
+        (:meth:`_expand_per_token_target`), and gap-mask construction.
+
+        The returned item depends on the task-driven output flags:
+
+        - per_trial (``is_per_trial``) -> ``[data, label, class_seq, gap_mask]``
+          via :meth:`__build_per_trial_item`. ``label`` is a single int per
+          sample; ``gap_mask`` is 2-D (one row per element, padded).
+        - per_token classify (``per_token_classify``) ->
+          ``[data, target, class_seq, gap_mask]``. ``class_seq`` is
+          ``sample.class_seq``; ``gap_mask`` is 2-D.
+        - predict (``_wants_target_probs``) ->
+          ``[data, target, class_seq, target_probs, gap_mask]``. ``class_seq`` is
+          the unreduced-state ids (debug only); ``target_probs`` is (T, C) grammar
+          transition distributions; ``gap_mask`` is 1-D.
+
+        Shapes: ``data`` (T, J); ``target`` (T,); ``target_probs`` (T, C) where C
+        is the unreduced-state count. Masked target positions hold ``pad_index``.
+        ``class_seq`` is only provided for debugging.
         """
         assert not (torch.is_tensor(idx)), "idx needs to be an integer"
 
@@ -558,22 +557,26 @@ class SeqDataset(Dataset):
         else:
             reshape = lambda x: self.load_to_tensor(x)
 
-        if self.do_classify:
-            # This is the place holder that should not be used in that context
+        if self.is_per_trial:
+            return self.__build_per_trial_item(sample, reshape)
+
+        if self.per_token_classify:
             target_probs_or_placeholder = sample.class_seq
         else:
             target_probs_or_placeholder = sample.target_probs
 
         data = []
-        target = []
+        durations = []
         gap_mask = []
         target_probs = []
         timestamp = 0
         seq_element = 0
 
-        for data_idx, target_idx, state_idx, target_prob in zip(
+        # The per-element target values (sample.target_seq) are consumed after
+        # the loop by _expand_per_token_target; here we only accumulate each
+        # element's timestep duration so the broadcast can be done in one pass.
+        for data_idx, state_idx, target_prob in zip(
             sample.class_seq,
-            sample.target_seq,
             sample.state_seq,
             target_probs_or_placeholder,
         ):
@@ -589,7 +592,7 @@ class SeqDataset(Dataset):
             cur_data_sample = reshape(cur_data_sample)
 
             # ---> apply any transforms here
-            # TODO BZ: add noise transforms to sample!!
+            # TODO BZ: add noise transforms to sample!! 
             if self.transform:
                 # cur_data_sample_tmp = self.transform(cur_data_sample)
                 # print("Sample shape before transform:", cur_data_sample.shape)
@@ -614,15 +617,13 @@ class SeqDataset(Dataset):
             # ================================================================================
 
             data_t = cur_data_sample.shape[0]
+            durations.append(data_t + delay_dur)
 
-            # TODO @BZ @Younes move logic to new *tasks* module
-            target.append(torch.ones(data_t + delay_dur) * target_idx)
-
-            if not self.do_classify:
+            if not self.per_token_classify:
                 target_prob = torch.tensor(target_prob).unsqueeze(0)
                 target_probs.append(target_prob.repeat(data_t + delay_dur, 1))
 
-            if self.do_classify:
+            if self.per_token_classify:
                 gap_mask.append(
                     torch.cat(
                         [torch.zeros(timestamp + data_t - 1), torch.ones(delay_dur + 1)]
@@ -636,19 +637,19 @@ class SeqDataset(Dataset):
             seq_element += 1
 
         data = torch.cat(data, dim=0)
-        target = torch.cat(target, dim=0)
+        target = self._expand_per_token_target(sample.target_seq, durations)
 
-        if not self.do_classify:
+        if not self.per_token_classify:
             target_probs = torch.cat(target_probs, dim=0)
 
         assert data.shape[0] == target.shape[0]
 
-        if self.do_classify:
+        if self.per_token_classify:
             gap_mask = torch.nn.utils.rnn.pad_sequence(gap_mask, batch_first=True)
         else:
             gap_mask = torch.cat(gap_mask, dim=0)
 
-        if self.do_classify:
+        if self.per_token_classify:
             assert data.shape[0] == target.shape[0]
             sample = [data, target, sample.class_seq, gap_mask]
         else:
@@ -659,6 +660,76 @@ class SeqDataset(Dataset):
             ]
             sample = [data, target, class_seq, target_probs, gap_mask]
         return sample
+
+    def _expand_per_token_target(self, per_element_values, durations):
+        """Broadcast a per-element target to per-timestep, held constant per element.
+
+        The task module owns *what* the target is (``per_element_values`` is
+        ``sample.target_seq``: a class id per sequence element, or ``pad_index``
+        for a masked position). The dataset owns *how long* each element lasts in
+        the temporal embedding (``durations[i] = data_t + delay_dur``). This
+        repeats each value across its element's timesteps:
+        ``torch.cat([torch.ones(dur) * val for val, dur in ...])``.
+
+        Returns a float tensor; the collate functions cast it to long.
+
+        Args:
+            per_element_values: per-element target ints (``sample.target_seq``).
+            durations: per-element timestep counts (``data_t + delay_dur``),
+                in the same element order as ``per_element_values``.
+        """
+        return torch.cat(
+            [
+                torch.ones(dur) * val
+                for val, dur in zip(per_element_values, durations)
+            ]
+        )
+
+    def __build_per_trial_item(self, sample, reshape):
+        """Assemble a whole-sequence classification item: one label per sample.
+
+        The input is built by the same per-token embedding + gap assembly as the
+        per-token path, but the target is a single label (``sample.target_seq``
+        is a scalar from a per_trial task). Returns ``[data, label, class_seq,
+        gap_mask]`` for :meth:`PadSequence.pad_collate_classify_trial`.
+        """
+        data = []
+        gap_mask = []
+        timestamp = 0
+        seq_element = 0
+
+        for data_idx, state_idx in zip(sample.class_seq, sample.state_seq):
+            if self._input_mapping_base == "one_hot":
+                data_idx = self.base_dataset.class_dict[data_idx]
+            else:
+                data_idx = int(self.rng.choice(self.base_dataset.class_dict[data_idx]))
+
+            cur_data_sample = reshape(self.base_dataset[data_idx][0])
+            if self.transform:
+                cur_data_sample = self.transform(cur_data_sample)
+                self.base_shape = self.__get_dynamic_samples_dimensions(cur_data_sample)
+            data.append(cur_data_sample)
+
+            if self._gap_profile is not None:
+                gap_items = self._add_gap_content(seq_element, state_idx, reshape)
+                data.extend(gap_items)
+                delay_dur = sum(item.shape[0] for item in gap_items) if gap_items else 0
+            else:
+                delay_dur = 0
+
+            data_t = cur_data_sample.shape[0]
+            gap_mask.append(
+                torch.cat(
+                    [torch.zeros(timestamp + data_t - 1), torch.ones(delay_dur + 1)]
+                )
+            )
+            timestamp += data_t + delay_dur
+            seq_element += 1
+
+        data = torch.cat(data, dim=0)
+        gap_mask = torch.nn.utils.rnn.pad_sequence(gap_mask, batch_first=True)
+        label = int(sample.target_seq)
+        return [data, label, sample.class_seq, gap_mask]
 
     def __get_sample(self, idx):
         """
@@ -692,17 +763,38 @@ class SeqDataset(Dataset):
         """
         Convert a GeneratorSample to a Sample object.
 
+        The training target comes entirely from the configured task (via
+        :class:`~seqbench.tasks.target_builder.TaskTargetBuilder`). ``target_probs``
+        is an orthogonal grammar-transition channel, emitted only for a
+        per_token prediction-like task over a grammar source.
+
         Args:
             gensample: GeneratorSample object from the sequence generator.
 
         Returns:
             Sample: Sample object with target sequences and probabilities.
         """
-        target_seq = self.create_target_for_gensample(gensample, self.do_classify)
-        if self.do_classify:
-            target_probs = None
-        else:
+        # For Classification(label_source="base"), the task is deferred: it
+        # cannot run at draw time because the base-dataset label is only
+        # available here (SeqDataset owns base_dataset). Populate the label
+        # from the first class in class_seq before calling to_target_seq().
+        task = self.target_builder.task
+        if (
+            getattr(task, "needs_base_dataset", False)
+            and not (gensample.targets and self.target_builder.task_name in gensample.targets)
+        ):
+            class_idx = int(gensample.class_seq[0])
+            candidates = self.base_dataset.class_dict[class_idx]
+            # class_dict values are lists (real datasets) or scalars (one_hot)
+            rep_idx = int(candidates[0]) if hasattr(candidates, "__len__") else int(candidates)
+            gensample.label = int(self.base_dataset[rep_idx][1])
+
+        resolved = self.target_builder.to_target_seq(gensample)
+        target_seq = resolved.target_seq
+        if self._wants_target_probs:
             target_probs = self.target_prob_generator(gensample.state_seq)
+        else:
+            target_probs = None
         return Sample(
             gensample.class_seq,
             gensample.state_seq,
@@ -711,40 +803,20 @@ class SeqDataset(Dataset):
             gensample.length,
         )
 
-    def create_target_for_gensample(self, gensample, do_classify):
-        """
-        Create target sequence for a generator sample.
 
-        For classification tasks, creates targets from unreduced state IDs.
-        For prediction tasks, creates targets from class sequences with special
-        handling for end-of-sequence tokens.
+# TODO BZ: should probably use the class constructor directly
+def make_pad_sequence(dataset, pad_index=-1, debug_class=True):
+    """Build the :class:`PadSequence` collate matching a dataset's output kind.
 
-        Args:
-            gensample: GeneratorSample object.
-            do_classify: Whether this is for classification (True) or prediction (False).
-
-        Returns:
-            np.ndarray: Target sequence array.
-        """
-        if do_classify:
-            return np.array(
-                [
-                    self.target_prob_generator.unred_state_to_id(s)
-                    for s in gensample.state_seq
-                ]
-            )
-        else:
-            # temporary fix till we have a better solution
-            # it could be then we need to have the target also generated by the generator
-            if gensample.class_seq[-1] == 0:
-                cls_seq = gensample.class_seq
-                cls_seq[np.where(cls_seq == 0)[0][:-1] + 1] = 0
-                return np.append(cls_seq[1:], [0])
-            else:
-                cls_seq = gensample.class_seq
-                cls_seq[np.where(cls_seq == 0)[0] + 1] = 0
-                return np.append(cls_seq[1:], [0])
-            # return np.append(gensample.class_seq[1:], [0])
+    Derives the right collate from the (task-driven) ``dataset`` flags so call
+    sites never hardcode ``do_classify``.
+    """
+    return PadSequence(
+        do_classify=dataset.per_token_classify,
+        pad_index=pad_index,
+        debug_class=debug_class,
+        per_trial=dataset.is_per_trial,
+    )
 
 
 class PadSequence:
@@ -766,20 +838,25 @@ class PadSequence:
         >>> # Returns dict with 'data', 'labels', 'mask', 'lens', 'gap_mask', etc.
     """
 
-    def __init__(self, do_classify=None, pad_index=-1, debug_class=True):
+    def __init__(self, do_classify=None, pad_index=-1, debug_class=True, per_trial=False):
         """
         Initialize the PadSequence collate function.
 
         Args:
-            do_classify: If True, use classification collate function (includes labels).
-                        If False, use prediction collate function (includes target_probs).
-                        If None, must be set later (default: None).
+            do_classify: If True, use the per-token classification collate
+                        (per-token labels, no target_probs). If False, use the
+                        prediction collate (includes target_probs). Ignored when
+                        ``per_trial`` is True.
             pad_index: Index value to use for padding sequences (default: -1).
             debug_class: Whether to include debug class sequences in output (default: True).
+            per_trial: If True, use the whole-sequence classification collate
+                        (one label per sample).
         """
         self.pad_index = pad_index
         self.debug_class = debug_class
-        if do_classify:
+        if per_trial:
+            self.pad_collate_fn = self.pad_collate_classify_trial
+        elif do_classify:
             self.pad_collate_fn = self.pad_collate_classify
         else:
             self.pad_collate_fn = self.pad_collate_predict
@@ -869,6 +946,52 @@ class PadSequence:
                 "lens": lens,
                 "gap_mask": gap_mask.contiguous(),
             }
+
+    def pad_collate_classify_trial(self, batch):
+        """Collate for whole-sequence classification (one label per sample).
+
+        Args:
+            batch: List of ``[data, label, class_seq, gap_mask]`` items, where
+                ``label`` is a single int per sample.
+
+        Returns:
+            dict with ``data`` (B, T, ...), ``labels`` (B,), ``mask`` (B, T),
+            ``lens`` (B,), and padded ``gap_mask``.
+        """
+        data = []
+        labels = []
+        mask = []
+        lens = []
+        gap_masks = []
+
+        for data_b, label_b, class_seq_b, gap_mask_b in batch:
+            l = data_b.shape[0]
+            data.append(data_b)
+            labels.append(int(label_b))
+            mask.append(torch.ones(l))
+            lens.append(l)
+            gap_masks.append(torch.Tensor(gap_mask_b))
+
+        max_len = max(tensor.size(1) for tensor in gap_masks)
+        max_elem = max(tensor.size(0) for tensor in gap_masks)
+        padded_gaps = [
+            F.pad(tensor, (0, max_len - tensor.size(1), 0, max_elem - tensor.size(0)))
+            for tensor in gap_masks
+        ]
+        gap_mask = torch.stack(padded_gaps)
+
+        data = torch.nn.utils.rnn.pad_sequence(data, batch_first=True)
+        mask = torch.nn.utils.rnn.pad_sequence(mask, batch_first=True)
+        lens = torch.as_tensor(lens)
+        labels = torch.as_tensor(labels).long()
+
+        return {
+            "data": data.float(),
+            "labels": labels,  # (B,) one label per sample
+            "mask": mask.float(),
+            "lens": lens,
+            "gap_mask": gap_mask.contiguous(),
+        }
 
     def pad_collate_predict(self, batch):
         """

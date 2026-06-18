@@ -27,6 +27,8 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
+  # Global grid resolution in seconds (single source of truth for stimulus + gap).
+  dt: 0.1
   storage:
     path: "data/SeqBench"
     force_rebuild: false
@@ -35,8 +37,7 @@ seqbench:
     sample_length: 20
     gap_profile:
       start: 0
-      duration: {dist: "uniform", params: {low: 5, high: 5}}
-      dt: 0.1
+      duration: {dist: "uniform", params: {low: 5, high: 5}}  # seconds
   input_mapping:
     base: "dvsgesture"
     base_params:

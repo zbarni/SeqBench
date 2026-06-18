@@ -14,6 +14,7 @@ Key Components:
 
 # Standard library imports
 import os
+import json
 import yaml
 from dataclasses import dataclass
 from multiprocessing import Pool, Manager
@@ -25,6 +26,50 @@ import tqdm
 
 # Local imports
 from seqbench.seq_utils.generator import GeneratorSample
+from seqbench.tasks.base import Target
+
+
+def _json_default(o):
+    """JSON encoder fallback for numpy scalars/arrays in Target values."""
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def _targets_to_json(targets: Optional[Dict[str, Target]]) -> str:
+    """Serialize a ``{name: Target}`` dict to a JSON string ('' when empty)."""
+    if not targets:
+        return ""
+    obj = {
+        name: {"values": t.values, "mask": t.mask, "kind": t.kind}
+        for name, t in targets.items()
+    }
+    return json.dumps(obj, default=_json_default)
+
+
+def _targets_from_json(field: str) -> Optional[Dict[str, Target]]:
+    """Parse the serialized targets field back into a ``{name: Target}`` dict."""
+    field = field.strip()
+    if not field:
+        return None
+    obj = json.loads(field)
+    return {
+        name: Target(values=d["values"], mask=d["mask"], kind=d["kind"])
+        for name, d in obj.items()
+    }
+
+
+def _strip_parens(s: str) -> str:
+    """Remove parentheses from a state name (e.g. ``"i(1)"`` → ``"i1"``).
+
+    Matches the normalisation applied by
+    ``SequenceGenerator.generate_sequence()`` so that state strings in
+    ``transition_probs`` / ``unred_state_to_id_map`` are consistent with
+    those in ``GeneratorSample.state_seq``.
+    """
+    return s.replace("(", "").replace(")", "")
 
 
 @dataclass
@@ -103,45 +148,38 @@ class RestrictedTargetProbGenerator:
         self.__parse(transitions)
 
     def __parse(self, transitions):
+        # Keep original transitions for write-back and debugging.
+        # Build unreduced_states as normalised (paren-stripped) forms because
+        # SequenceGenerator.generate_sequence() strips parens from state strings
+        # (e.g. "i(1)" → "i1"), so all downstream lookups use stripped keys.
         self.transitions = transitions
-        self.unreduced_states = list(transitions.keys())
+        self.unreduced_states = list(dict.fromkeys(
+            _strip_parens(k) for k in transitions
+        ))
         self.num_unreduced_states = len(self.unreduced_states)
 
-        self.__parse_states()
+        self.__parse_states(list(transitions.keys()))
         self.__parse_transitions(transitions)
 
-    def __parse_states(self):
-        tmp_id_to_state_map = {}
-        for s in self.unreduced_states:
-            s_red = self.reduce_state(s)
-            if s_red not in self.reduced_states:
-                s_red_id = ord(s_red) - 64 if s_red.isupper() else ord(s_red) - 70
-                self.reduced_states.append(s_red)
-                self.red_state_to_id_map[s_red] = s_red_id
-                tmp_id_to_state_map[s_red_id] = s_red
-
+    def __parse_states(self, original_keys: list) -> None:
+        # --- Reduced states (observable symbols) ---
+        # Derive from ORIGINAL state names so multi-character bases like "BX"
+        # (from "BX(1)", "BX(2)") are preserved correctly by reduce_state.
+        # Sort before assigning IDs to align with SymbolEncoder, which assigns
+        # indices in sorted alphabet order (EOS=0, symbols=1..N).
+        reduced_set: set = {self.reduce_state(s) for s in original_keys}
+        for i, s_red in enumerate(sorted(reduced_set), start=1):
+            self.reduced_states.append(s_red)
+            self.red_state_to_id_map[s_red] = i
         self.num_reduced_states = len(self.reduced_states)
 
-        tmp_reduced_states_count = [0 for _ in range(self.num_reduced_states)]
-        for s in self.unreduced_states:
-            s_red = self.reduce_state(s)
-            s_red_id = self.red_state_to_id_map[s_red]
-            tmp_reduced_states_count[s_red_id - 1] += 1
+        # --- Unreduced states (normalised forms) ---
+        # self.unreduced_states already holds normalised (stripped) keys.
+        # Sort for determinism; the ordering only affects classification target IDs.
+        for i, s_norm in enumerate(sorted(self.unreduced_states), start=1):
+            self.unred_state_to_id_map[s_norm] = i
 
-        id_count = 1
-        for s_red_id in range(1, self.num_reduced_states + 1):
-            s_red = tmp_id_to_state_map[s_red_id]
-            s_red_count = tmp_reduced_states_count[s_red_id - 1]
-            if s_red_count == 1:
-                self.unred_state_to_id_map[f"{s_red}"] = id_count
-                self.unred_state_to_id_map[f"{s_red}0"] = id_count  # just in case
-                id_count += 1
-            else:
-                for i in range(s_red_count):
-                    self.unred_state_to_id_map[f"{s_red}{i}"] = id_count
-                    id_count += 1
-
-        # Account for eos symbol
+        # EOS
         self.red_state_to_id_map["#"] = 0
         self.unred_state_to_id_map["#"] = 0
         self.num_reduced_states += 1
@@ -151,17 +189,20 @@ class RestrictedTargetProbGenerator:
         self.id_to_red_state_map = {v: k for k, v in self.red_state_to_id_map.items()}
         self.id_to_unred_state_map = {v: k for k, v in self.unred_state_to_id_map.items()}
 
-    def __parse_transitions(self, transitions):
-        transition_probs = {}
+    def __parse_transitions(self, transitions) -> None:
+        transition_probs: dict = {}
 
-        for s in self.unreduced_states:
-            transition_probs[s] = np.zeros(self.num_reduced_states)
+        # One probability array per normalised unreduced state (including EOS).
+        for s_norm in self.unreduced_states:
+            transition_probs[s_norm] = np.zeros(self.num_reduced_states)
 
+        # Fill probabilities.  state_name and child_s are in original form;
+        # reduce_state is called on originals for correct multi-char base handling.
         for state_name, mcstate in transitions.items():
+            s_from = _strip_parens(state_name)
             for i, child_s in enumerate(mcstate.childs):
-                child_s = self.reduce_state(child_s)
-                child_s = self.red_state_to_id_map[child_s]
-                transition_probs[state_name][child_s] += mcstate.probs[i]
+                child_id = self.red_state_to_id_map[self.reduce_state(child_s)]
+                transition_probs[s_from][child_id] += mcstate.probs[i]
 
         self.transition_probs = transition_probs
 
@@ -179,9 +220,16 @@ class RestrictedTargetProbGenerator:
                 target_probs.append(transition_prob)
         return np.array(target_probs)
 
-    def reduce_state(self, s):
-        assert len(s) <= 4, f"Unreduced states should not have more than 2 characters. Got {s}!"
-        return s[0]
+    def reduce_state(self, s: str) -> str:
+        """Return the observable symbol for state ``s``.
+
+        Strips the parenthesised disambiguation index, if any:
+        ``"BX(12)"`` → ``"BX"``, ``"i(1)"`` → ``"i"``, ``"b"`` → ``"b"``.
+        Works for single- and multi-character base symbols, and for any number
+        of digits in the index.
+        """
+        idx = s.find('(')
+        return s if idx == -1 else s[:idx]
 
     def print_transitions(self):
         for s_from, state in self.transitions.items():
@@ -267,7 +315,7 @@ class DatasetGenerator:
         Raises:
             AssertionError: If class_seq and state_seq have different lengths
         """
-        line = line.split("::")
+        line = line.split("::", 3)
 
         class_seq = line[0].replace("[", "").replace("]", "")
         class_seq = class_seq.split(",")
@@ -282,7 +330,11 @@ class DatasetGenerator:
 
         length = int(line[2])
 
-        return GeneratorSample(class_seq, state_seq, length)
+        # 4th field (targets) is optional: legacy 3-field datasets parse with
+        # targets=None and rely on the task builder to recompute derivable ones.
+        targets = _targets_from_json(line[3]) if len(line) >= 4 else None
+
+        return GeneratorSample(class_seq, state_seq, length, targets=targets)
 
     @staticmethod
     def read_transitions_from_file(file) -> Dict[str, MCState]:
@@ -329,7 +381,8 @@ class DatasetGenerator:
 
         assert len(class_seq) == len(state_seq), "Class and state sequences must have same length"
 
-        file.write(f"{class_seq}::{state_seq}::{gensample.length}\n")
+        targets_field = _targets_to_json(getattr(gensample, "targets", None))
+        file.write(f"{class_seq}::{state_seq}::{gensample.length}::{targets_field}\n")
 
     def generate(self) -> None:
         """
@@ -350,7 +403,8 @@ class DatasetGenerator:
             self.__generate_for_dataset("test", self.dataset_size)
 
         self.__write_config_to_file()
-        self.__write_transitions_to_file()
+        if hasattr(self.seq_generator.source, "transitions"):
+            self.__write_transitions_to_file()
 
     def _generate_single(self, args) -> None:
         """

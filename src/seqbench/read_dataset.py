@@ -21,7 +21,7 @@ import numpy as np
 
 from seqbench import config as cfg_mod
 from seqbench.utils import get_config_hash
-from seqbench.seq_dataset import PadSequence, SeqDataset
+from seqbench.seq_dataset import SeqDataset, make_pad_sequence
 from seqbench.sources import build_symseq_source
 from seqbench.dataset import create_base_dataset_from_config
 from seqbench.transforms import compose_transforms_from_config
@@ -47,12 +47,12 @@ if __name__ == '__main__':
     assert run_cfg.symseq is not None, "config must contain a 'symseq' section"
 
     seed = run_cfg.dataset.seed
-    train_size = int(run_cfg.dataset.splits['train'])
+    train_size = run_cfg.dataset.split_size('train')
 
     random.seed(seed)
     np.random.seed(seed)
 
-    source = build_symseq_source(run_cfg.symseq.generator)
+    source = build_symseq_source(run_cfg)
 
     inp_map = run_cfg.seqbench.input_mapping
 
@@ -60,11 +60,13 @@ if __name__ == '__main__':
     if inp_map.base == 'one_hot':
         kwargs['alphabet_size'] = len(source.alphabet)
 
-    base_dataset = create_base_dataset_from_config(inp_map, 'train', **kwargs)
+    base_dataset = create_base_dataset_from_config(
+        inp_map, 'train', dt=run_cfg.seqbench.dt, **kwargs
+    )
     transforms = compose_transforms_from_config(inp_map)
 
     config_hash = get_config_hash(run_cfg, dataset_size=train_size)
-    dataset_root = f"{run_cfg.seqbench.storage.path}/{config_hash}"
+    dataset_root = os.path.join(run_cfg.seqbench.storage.path, config_hash)
 
     seq_dataset = SeqDataset(
         config=run_cfg,
@@ -73,7 +75,6 @@ if __name__ == '__main__':
         is_train=True,
         dataset_size=train_size,
         config_file_path=args['config'],
-        do_classify=True,
         pad_index=-1,
         dataset_root=dataset_root,
         transform=transforms,
@@ -83,10 +84,7 @@ if __name__ == '__main__':
         seq_dataset,
         batch_size=2,
         shuffle=False,
-        collate_fn=PadSequence(
-            do_classify=True,
-            pad_index=-1,
-        ),
+        collate_fn=make_pad_sequence(seq_dataset, pad_index=-1),
         num_workers=1,
     )
 
