@@ -34,6 +34,8 @@ from seqbench.transforms.base import TimeGrid
 # Configure logging
 logger = logging.getLogger(__name__)
 
+_AUTO = object()
+
 
 @dataclass
 class _GapProfile:
@@ -97,16 +99,19 @@ class SeqDataset(Dataset):
     def __init__(
         self,
         config,
-        generator: Any,
-        base_dataset: Any,
-        is_train: bool,
-        dataset_size: int,
-        config_file_path: Optional[str],
+        split: Optional[str] = None,
+        *,
+        generator: Any = None,
+        base_dataset: Any = None,
+        is_train: Optional[bool] = None,
+        dataset_size: Optional[int] = None,
+        config_file_path: Optional[str] = None,
+        config_snapshot: Optional[dict] = None,
         pad_index: int = -1,
         not_temporal: bool = False,
         load_to_tensor: Optional[callable] = None,
-        transform: Optional[callable] = None,
-        initial_time_grid: Optional[TimeGrid] = None,
+        transform: Optional[callable] = _AUTO,
+        initial_time_grid: Optional[TimeGrid] = _AUTO,
         dataset_root: Optional[str] = None,
     ) -> None:
         """
@@ -114,23 +119,78 @@ class SeqDataset(Dataset):
 
         Args:
             config: :class:`~seqbench.config.RunConfig`.
-            generator: Sequence generator / trial source for creating sequences.
-            base_dataset: Base dataset providing raw data samples.
-            is_train: Whether this is a training dataset.
-            dataset_size: Number of samples to use.
-            config_file_path: Path to the YAML config file written into the
-                generated dataset directory.
+            split: Dataset split name, for example ``"train"`` or ``"test"``.
+            generator: Optional sequence generator / trial source override.
+            base_dataset: Optional base dataset override.
+            is_train: Legacy split boolean. If provided without ``split``,
+                ``True`` maps to ``"train"`` and ``False`` maps to ``"test"``.
+            dataset_size: Optional split-size override. Defaults to
+                ``config.dataset.split_size(split)``.
+            config_file_path: Optional original YAML path copied into generated
+                dataset metadata.
+            config_snapshot: Optional parsed config snapshot for metadata.
             pad_index: Index to use for padding sequences (default: -1).
             not_temporal: If True, treat data as non-temporal (default: False).
             load_to_tensor: Optional function to convert data to tensors.
-            transform: Optional transform to apply to data samples.
-            initial_time_grid: Optional native time grid for base dataset output.
-            dataset_root: Root directory for dataset storage (default: None).
+            transform: Optional transform override. Omit to build from config.
+            initial_time_grid: Optional native time grid override. Omit to
+                derive from config.
+            dataset_root: Optional generated sequence cache directory override.
         """
-        self._init_from_run_cfg(config, dataset_size, config_file_path)
+        split = self._resolve_split(split, is_train)
+        self._init_from_run_cfg(
+            config,
+            split,
+            dataset_size,
+            config_file_path,
+            config_snapshot,
+        )
+        base_dataset_provided = base_dataset is not None
+
+        if generator is None:
+            from seqbench.sources import build_symseq_source
+
+            generator = build_symseq_source(config)
+
+        if transform is _AUTO:
+            from seqbench.transforms import compose_transforms_from_config
+
+            transform = compose_transforms_from_config(config.seqbench.input_mapping)
+
+        if initial_time_grid is _AUTO:
+            from seqbench.dataset import initial_time_grid_from_config
+
+            try:
+                initial_time_grid = initial_time_grid_from_config(
+                    config.seqbench.input_mapping,
+                    final_dt=config.seqbench.time_grid.dt,
+                )
+            except KeyError:
+                if not base_dataset_provided:
+                    raise
+                initial_time_grid = None
+
+        if base_dataset is None:
+            from seqbench.dataset import create_base_dataset_from_config
+
+            kwargs = {}
+            if config.seqbench.input_mapping.base == "one_hot":
+                kwargs["alphabet_size"] = len(generator.alphabet)
+            base_dataset = create_base_dataset_from_config(
+                config.seqbench.input_mapping,
+                split,
+                final_dt=config.seqbench.time_grid.dt,
+                **kwargs,
+            )
+
+        if dataset_root is None:
+            from seqbench.utils import dataset_cache_dir
+
+            dataset_root = dataset_cache_dir(config, split, self.dataset_size)
 
         self.base_dataset = base_dataset
-        self.is_train = is_train
+        self.split = split
+        self.is_train = split == "train"
         self.transform = transform
         self.initial_time_grid = initial_time_grid
         self.generator = generator
@@ -204,14 +264,35 @@ class SeqDataset(Dataset):
     # Private initialisation helpers
     # ------------------------------------------------------------------
 
-    def _init_from_run_cfg(self, run_cfg, dataset_size, config_file_path):
+    def _resolve_split(self, split, is_train):
+        if split is None:
+            return "train" if is_train is not False else "test"
+        if is_train is not None:
+            expected = "train" if is_train else "test"
+            if split != expected:
+                raise ValueError(
+                    f"split={split!r} conflicts with is_train={is_train!r}"
+                )
+        return split
+
+    def _init_from_run_cfg(
+        self,
+        run_cfg,
+        split,
+        dataset_size,
+        config_file_path,
+        config_snapshot,
+    ):
         """Extract all config-derived values from a :class:`~seqbench.config.RunConfig`."""
-        from seqbench.utils import parse_gap_duration
+        from seqbench.utils import build_cache_manifest, parse_gap_duration, to_plain_data
 
         self._run_cfg = run_cfg
+        self.split = split
         seqbench_seed = run_cfg.seqbench.seed if run_cfg.seqbench is not None else None
         self._seed = seqbench_seed if seqbench_seed is not None else run_cfg.dataset.seed
-        self.dataset_size = dataset_size
+        self.dataset_size = (
+            dataset_size if dataset_size is not None else run_cfg.dataset.split_size(split)
+        )
         self._final_dt = run_cfg.seqbench.time_grid.dt
         self._time_validation = run_cfg.seqbench.time_grid.validation
         self.read_from_file = (
@@ -220,6 +301,16 @@ class SeqDataset(Dataset):
         self.prob_generator_type = run_cfg.seqbench.prob_generator_type
         self.regenerate = run_cfg.seqbench.storage.force_rebuild
         self._config_file_path = config_file_path
+        self._config_snapshot = (
+            config_snapshot if config_snapshot is not None else to_plain_data(run_cfg)
+        )
+        self._cache_manifest = build_cache_manifest(
+            run_cfg,
+            split,
+            self.dataset_size,
+            source_config=self._config_snapshot,
+            source_config_path=config_file_path,
+        )
         self._input_mapping_base = run_cfg.seqbench.input_mapping.base
         self._global_noise = 0
 
@@ -311,6 +402,45 @@ class SeqDataset(Dataset):
         per-token state ids), i.e. no target_probs. Used to pick the collate."""
         return self.is_per_trial or self.per_token_classify
 
+    @property
+    def config(self):
+        """Resolved :class:`~seqbench.config.RunConfig` used by this dataset."""
+        return self._run_cfg
+
+    @property
+    def input_mapping(self):
+        """Configured input mapping used to build base data and transforms."""
+        return self._run_cfg.seqbench.input_mapping
+
+    @property
+    def task_config(self):
+        """Configured SeqBench task definition."""
+        return self._run_cfg.seqbench.task
+
+    @property
+    def time_grid(self):
+        """Resolved output time grid after base data and transforms."""
+        return self._time_grid
+
+    @property
+    def dt(self):
+        """Seconds per row in the resolved output time grid."""
+        return self._dt
+
+    @property
+    def returns_target_probs(self) -> bool:
+        """True when ``__getitem__`` includes target probability tensors."""
+        return self._wants_target_probs
+
+    @property
+    def output_kind(self) -> str:
+        """Dataset output mode: prediction, per-token, or per-trial labels."""
+        if self.is_per_trial:
+            return "per_trial_classification"
+        if self.per_token_classify:
+            return "per_token_classification"
+        return "prediction"
+
     # ------------------------------------------------------------------
     # Private dataset methods
     # ------------------------------------------------------------------
@@ -326,19 +456,15 @@ class SeqDataset(Dataset):
             return False
         if not os.path.isdir(self.dataset_root):
             return False
+        if not os.path.isfile(os.path.join(self.dataset_root, "manifest.yaml")):
+            return False
         if not os.path.isfile(os.path.join(self.dataset_root, "config.yaml")):
             return False
         if hasattr(self.generator, "transitions") and not os.path.isfile(
             os.path.join(self.dataset_root, "transitions")
         ):
             return False
-        if self.is_train and not os.path.isfile(
-            os.path.join(self.dataset_root, "train")
-        ):
-            return False
-        if not self.is_train and not os.path.isfile(
-            os.path.join(self.dataset_root, "test")
-        ):
+        if not os.path.isfile(os.path.join(self.dataset_root, self.split)):
             return False
         return True
 
@@ -349,7 +475,7 @@ class SeqDataset(Dataset):
         This method creates a DatasetGenerator and generates the dataset files
         (train or test) based on the configuration.
         """
-        print(f"SeqBench: Generating dataset with config {self._config_file_path}!")
+        print(f"SeqBench: Generating {self.split!r} dataset in {self.dataset_root}!")
         self.gs = self.__create_sequence_generator()
         # Populate the transition map before generation so tasks that need it at
         # draw time (e.g. StateClassification) resolve correctly and serialize.
@@ -360,8 +486,9 @@ class SeqDataset(Dataset):
             dataset_size=self.dataset_size,
             output_dir=self.dataset_root,
             config_file_path=self._config_file_path,
-            generate_train=self.is_train,
-            generate_test=(not self.is_train),
+            config_snapshot=self._config_snapshot,
+            manifest=self._cache_manifest,
+            split=self.split,
         )
         dataset_generator.generate()
 
@@ -527,10 +654,7 @@ class SeqDataset(Dataset):
         Returns:
             list: List of Sample objects loaded from the dataset file.
         """
-        if self.is_train:
-            data_path = os.path.join(self.dataset_root, "train")
-        else:
-            data_path = os.path.join(self.dataset_root, "test")
+        data_path = os.path.join(self.dataset_root, self.split)
 
         buffered_samples = []
         pbar = tqdm.tqdm(total=self.dataset_size, desc="Buffering samples")

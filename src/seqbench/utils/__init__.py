@@ -5,7 +5,18 @@
 Utility functions for SeqBench.
 """
 
+import hashlib
+import json
+import os
+from dataclasses import fields, is_dataclass
+from enum import Enum
+from pathlib import Path
+
 import numpy as np
+
+
+CACHE_KEY_VERSION = 1
+GENERATED_DATASET_FORMAT_VERSION = 2
 
 
 def parse_gap_duration(identifier):
@@ -17,12 +28,152 @@ def parse_gap_duration(identifier):
         raise ValueError("Unknown gap_isi identifier!")
 
 
-def get_config_hash(run_cfg, dataset_size=None):
-    """Compute a cache key hash from a :class:`~seqbench.config.RunConfig`.
+def to_plain_data(value):
+    """Convert dataclass config objects into JSON/YAML-safe builtin values."""
+    if is_dataclass(value):
+        return {
+            field.name: to_plain_data(getattr(value, field.name))
+            for field in fields(value)
+        }
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {str(k): to_plain_data(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_plain_data(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
-    Pass ``dataset_size`` explicitly to include the split size in the hash
-    (used to differentiate train vs. test dataset directories).
+
+def sequence_cache_key_data(run_cfg, split, split_size=None):
+    """Return the normalized symbolic-generation inputs used for cache keys.
+
+    The key intentionally excludes runtime embedding details such as
+    ``seqbench.input_mapping`` and transforms. Those affect tensors produced by
+    ``SeqDataset.__getitem__`` but not the generated symbolic sequence file.
     """
+    if split_size is None:
+        split_size = run_cfg.dataset.split_size(split)
+
+    symseq = run_cfg.symseq
+    generator = {}
+    symseq_tasks = []
+    trial_params = {}
+    effective_symseq_seed = run_cfg.dataset.seed
+    if symseq is not None:
+        effective_symseq_seed = (
+            symseq.seed if symseq.seed is not None else run_cfg.dataset.seed
+        )
+        generator = to_plain_data(symseq.generator)
+        trial_params = to_plain_data(symseq.generator.trial_params)
+        symseq_tasks = to_plain_data(symseq.tasks)
+        _apply_inherited_generator_defaults(
+            generator,
+            dataset_cfg=run_cfg.dataset,
+            seed=effective_symseq_seed,
+        )
+
+    seqbench_seed = None
+    composition = {}
+    task = {}
+    prob_generator_type = None
+    if run_cfg.seqbench is not None:
+        seqbench_seed = run_cfg.seqbench.seed
+        composition = to_plain_data(run_cfg.seqbench.composition)
+        task = to_plain_data(run_cfg.seqbench.task)
+        prob_generator_type = run_cfg.seqbench.prob_generator_type
+
+    return {
+        "cache_key_version": CACHE_KEY_VERSION,
+        "generated_dataset_format_version": GENERATED_DATASET_FORMAT_VERSION,
+        "split": split,
+        "split_size": split_size,
+        "dataset": {
+            "seed": run_cfg.dataset.seed,
+            "alphabet": to_plain_data(run_cfg.dataset.alphabet),
+            "trial_length": to_plain_data(run_cfg.dataset.trial_length),
+        },
+        "symseq": {
+            "seed": effective_symseq_seed,
+            "generator": generator,
+            "generator_trial_params": trial_params,
+            "tasks": symseq_tasks,
+        },
+        "seqbench": {
+            "seed": seqbench_seed,
+            "composition": composition,
+            "task": task,
+            "prob_generator_type": prob_generator_type,
+        },
+    }
+
+
+def build_sequence_cache_key(run_cfg, split, split_size=None):
+    """Return a stable hash for generated symbolic sequence files."""
+    if (
+        run_cfg.seqbench is not None
+        and run_cfg.seqbench.storage.cache_key is not None
+    ):
+        return str(run_cfg.seqbench.storage.cache_key)
+    key_data = sequence_cache_key_data(run_cfg, split, split_size)
+    encoded = json.dumps(key_data, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:32]
+
+
+def dataset_cache_dir(run_cfg, split, split_size=None):
+    """Return the cache directory for a generated SeqBench split."""
+    if run_cfg.seqbench is None:
+        raise ValueError("RunConfig must contain a 'seqbench' section")
+    cache_key = build_sequence_cache_key(run_cfg, split, split_size)
+    return os.path.join(run_cfg.seqbench.storage.path, cache_key)
+
+
+def build_cache_manifest(
+    run_cfg,
+    split,
+    split_size=None,
+    *,
+    source_config=None,
+    source_config_path=None,
+):
+    """Return manifest metadata written next to generated sequence files."""
+    if split_size is None:
+        split_size = run_cfg.dataset.split_size(split)
+    cache_key = build_sequence_cache_key(run_cfg, split, split_size)
+    manifest = {
+        "cache_key_version": CACHE_KEY_VERSION,
+        "cache_key": cache_key,
+        "generated_dataset_format_version": GENERATED_DATASET_FORMAT_VERSION,
+        "split": split,
+        "split_size": split_size,
+        "source_config": (
+            source_config if source_config is not None else to_plain_data(run_cfg)
+        ),
+    }
+    if source_config_path is not None:
+        manifest["source_config_path"] = str(source_config_path)
+    return manifest
+
+
+def _apply_inherited_generator_defaults(generator, *, dataset_cfg, seed):
+    """Mirror build_symseq_source inheritance so cache keys match real sources."""
+    if not generator:
+        return
+    params = generator.setdefault("params", {})
+    gen_type = generator.get("type")
+    if gen_type == "ArtificialGrammar":
+        mode = generator.get("mode")
+        if mode in (None, "random"):
+            params.setdefault("alphabet_size", dataset_cfg.alphabet.size)
+            if dataset_cfg.alphabet.eos is not None:
+                params.setdefault("eos", dataset_cfg.alphabet.eos)
+    if seed is not None and "seed" not in params and "rng" not in params:
+        params.setdefault("seed", seed)
+
+
+def get_config_hash(run_cfg, dataset_size=None):
+    """Deprecated: compute the legacy cache key for older callers."""
     return _get_config_hash_from_run_cfg(run_cfg, dataset_size)
 
 

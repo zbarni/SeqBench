@@ -2,26 +2,15 @@ import os
 import logging
 import argparse
 import collections
-
 import torch
 import numpy as np
-
-# seqbench
-from seqbench import SeqDataset
-from seqbench import config as cfg_mod
-from seqbench.transforms import compose_transforms_from_config
-from seqbench.utils import get_config_hash
-from seqbench.seq_dataset import make_pad_sequence
-from seqbench.dataset import create_base_dataset_from_config, initial_time_grid_from_config
-
-# symseq (via SeqBench's centralized boundary)
-from seqbench.sources import build_symseq_source
-
 from matplotlib import pyplot as plt
 
-plt.rcParams["image.interpolation"] = "none"
+# seqbench
+from seqbench import build_dataloader
 
-__script_name__ = os.path.basename(__file__)
+
+plt.rcParams["image.interpolation"] = "none"
 
 logger = logging.getLogger("show_sample")
 
@@ -226,56 +215,16 @@ if __name__ == "__main__":
     """Tests sequence generator - generates and displays a random sample"""
 
     args = parse_cli_arguments()
-    run_cfg = cfg_mod.load(args["config"])
-
-    assert run_cfg.seqbench is not None, "config must contain a 'seqbench' section"
-    assert run_cfg.symseq is not None, "config must contain a 'symseq' section"
-
-    source = build_symseq_source(run_cfg)
-
-    seed = run_cfg.dataset.seed
-    train_size = int(run_cfg.dataset.splits["train"])
-    inp_map = run_cfg.seqbench.input_mapping
-
-    # base dataset
-    kwargs = {"alphabet_size": len(source.alphabet)}
-    base_dataset = create_base_dataset_from_config(
-        inp_map,
-        "train",
-        final_dt=run_cfg.seqbench.time_grid.dt,
-        **kwargs,
-    )
-    initial_time_grid = initial_time_grid_from_config(
-        inp_map, final_dt=run_cfg.seqbench.time_grid.dt
-    )
-
-    config_hash = get_config_hash(run_cfg, dataset_size=train_size)
-    dataset_root = os.path.join(run_cfg.seqbench.storage.path, config_hash)
-
-    transforms = compose_transforms_from_config(inp_map)
-
-    seq_dataset = SeqDataset(
-        config=run_cfg,
-        generator=source,
-        base_dataset=base_dataset,
-        is_train=True,
-        dataset_size=train_size,
-        config_file_path=args["config"],
-        pad_index=-1,
-        dataset_root=dataset_root,
-        transform=transforms,
-        initial_time_grid=initial_time_grid,
-    )
-
-    per_token_classify = seq_dataset.per_token_classify  # for the display branches below
-
-    seq_loader = torch.utils.data.DataLoader(
-        seq_dataset,
+    seq_loader = build_dataloader(
+        args["config"],
+        split="train",
         batch_size=3,
         shuffle=True,
-        collate_fn=make_pad_sequence(seq_dataset, pad_index=-1),
         num_workers=0,
     )
+    seq_dataset = seq_loader.dataset
+    inp_map = seq_dataset.input_mapping
+    per_token_classify = seq_dataset.per_token_classify
 
     batch = next(iter(seq_loader))
 

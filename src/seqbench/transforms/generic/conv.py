@@ -5,8 +5,6 @@
 Temporal unfolding and filtering transforms for sequence data processing.
 """
 
-import seaborn as sns
-import matplotlib.pyplot as plt
 from decimal import Decimal
 import numpy as np
 import torch
@@ -62,6 +60,12 @@ def make_temporal_kernel(
     torch.Tensor
         1D kernel tensor
     """
+    if "out_dt" in kwargs:
+        out_dt = kwargs.pop("out_dt")
+        if dt != 1.0 and not np.isclose(dt, out_dt):
+            raise ValueError("Specify either dt or out_dt for make_temporal_kernel, not both with different values")
+        dt = out_dt
+
     if device is None:
         device = torch.device("cpu")
 
@@ -221,12 +225,19 @@ class TemporalUnfold:
             kernel_spec["shape"], height=1.0, dt=out_dt, normalize=False, **kwargs
         )
 
-        if num_steps and duration:
-            if num_steps != int(np.floor(duration / out_dt)):
+        if duration is not None:
+            ratio = float(duration) / float(out_dt)
+            duration_steps = int(round(ratio))
+            if not np.isclose(ratio, duration_steps, rtol=0.0, atol=1e-9):
+                raise ValueError(
+                    "TemporalUnfold duration must align with out_dt: "
+                    f"duration / out_dt must be an integer, got {duration!r} / {out_dt!r}"
+                )
+            if num_steps is not None and num_steps != duration_steps:
                 raise ValueError("When both are specified, out_dt, num_steps and duration must be consistent!")
+            num_steps = duration_steps
         elif num_steps is None:
-            assert duration
-            num_steps = int(np.floor(duration / out_dt))
+            raise ValueError("TemporalUnfold requires either duration or num_steps")
 
         self.time_axis = torch.arange(num_steps) * out_dt
 

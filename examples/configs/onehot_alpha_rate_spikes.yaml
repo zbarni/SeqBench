@@ -31,7 +31,7 @@ seqbench:
     dt: 0.001  # seconds per final output row
   storage:
     path: "data/SeqBench"
-    force_rebuild: false
+    force_rebuild: true
   composition:
     combine_sequences: true
     sample_length: 20
@@ -46,16 +46,17 @@ seqbench:
         kernel_spec:
           shape: "alpha"
           params:
-            tau: 0.020    # seconds
+            tau: 0.010    # seconds
             width: 0.100  # seconds
         out_dt: 0.001     # seconds per unfolded row
         duration: 0.100   # seconds total
-        amplitude: 10.0
+        amplitude: 100.0
       - name: RateCoding
-        max_rate: 100.0
+        max_rate: 200.0
         normalize: true
       - name: PoissonEncoding
         temporal: true
+        # normalize defaults to false: consume RateCoding output as Hz.
         spike_dt: 0.001   # seconds per spike-bin row
   task:
     source: "symseq"

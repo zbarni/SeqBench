@@ -13,7 +13,7 @@ from seqbench.transforms.base import TransformTimeSpec
 class PowerLaw:
     """
     Apply power-law scaling: x -> x**gamma.
-    Assumes input x is already normalized to [0,1].
+    Assumes input x is already non-negative and typically normalized to [0, 1].
     """
 
     def __init__(self, gamma=5.0):

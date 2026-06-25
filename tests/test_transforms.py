@@ -519,11 +519,9 @@ class TestBinAlongAxis:
         with pytest.raises(ValueError, match="not divisible by bin_size"):
             BinAlongAxis(bin_size=3, bin_axis=0)(torch.ones(4))
 
-    def test_unknown_reduction_defaults_to_mean(self):
-        # The implementation treats any non-{sum,binary} reduction as "mean".
-        x = torch.tensor([2.0, 4.0])
-        out = BinAlongAxis(bin_size=2, bin_axis=0, reduction="whatever")(x)
-        assert torch.equal(out, torch.tensor([3.0]))
+    def test_unknown_reduction_raises(self):
+        with pytest.raises(ValueError, match="reduction must be one of"):
+            BinAlongAxis(bin_size=2, bin_axis=0, reduction="whatever")
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +571,10 @@ class TestRateCoding:
 # snn/poisson_encoding.PoissonEncoding
 # ---------------------------------------------------------------------------
 class TestPoissonEncoding:
+    def test_default_does_not_normalize(self):
+        enc = PoissonEncoding(temporal=True, spike_dt=0.001)
+        assert enc.normalize is False
+
     def test_static_requires_duration(self):
         with pytest.raises(ValueError, match="duration must be specified"):
             PoissonEncoding(temporal=False)
@@ -611,7 +613,7 @@ class TestPoissonEncoding:
 
     def test_high_rate_gives_more_spikes_than_low(self):
         torch.manual_seed(0)
-        enc = PoissonEncoding(temporal=True, spike_dt=0.001, normalize=False, seed=0)
+        enc = PoissonEncoding(temporal=True, spike_dt=0.001, seed=0)
         enc.bind_time_grid(TimeGrid(0.1), TimeGrid(0.001))
         low = enc(torch.full((4, 50), 1.0)).sum()
         high = enc(torch.full((4, 50), 200.0)).sum()
@@ -626,6 +628,11 @@ class TestPoissonEncoding:
         enc = PoissonEncoding(temporal=False, duration=0.05, normalize=True, seed=0)
         out = enc(torch.full((6,), 5.0))
         assert torch.count_nonzero(out) == 0
+
+    def test_explicit_normalize_uses_max_rate(self):
+        x = torch.tensor([0.0, 2.0, 4.0])
+        enc = PoissonEncoding(temporal=False, duration=0.001, normalize=True, max_rate=50.0)
+        assert torch.allclose(enc._normalize(x), torch.tensor([0.0, 25.0, 50.0]))
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +714,17 @@ class TestPowerLaw:
 # audio/adaptive_percentile_norm.AdaptivePercentileNorm
 # ---------------------------------------------------------------------------
 class TestAdaptivePercentileNorm:
+    @pytest.mark.parametrize(
+        "floor_percentile, ceil_percentile",
+        [(-1.0, 95.0), (5.0, 101.0), (50.0, 50.0), (75.0, 25.0)],
+    )
+    def test_invalid_percentiles_raise(self, floor_percentile, ceil_percentile):
+        with pytest.raises(ValueError, match="percentiles must satisfy"):
+            AdaptivePercentileNorm(
+                floor_percentile=floor_percentile,
+                ceil_percentile=ceil_percentile,
+            )
+
     def test_output_in_unit_range(self):
         x = torch.linspace(0, 100, 101)
         out = AdaptivePercentileNorm(floor_percentile=5, ceil_percentile=95)(x)

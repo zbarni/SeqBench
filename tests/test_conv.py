@@ -102,10 +102,22 @@ class TestTemporalUnfold:
         assert tc.duration == 1.0
         assert tc.time_axis.numel() == 10
 
+    def test_duration_must_align_with_out_dt(self):
+        """Test that duration must map to an integer number of output steps."""
+        kernel_spec = {"shape": "box", "params": {}}
+        with pytest.raises(ValueError, match="duration must align with out_dt"):
+            TemporalUnfold(kernel_spec=kernel_spec, out_dt=0.1, duration=1.05)
+
     def test_initialization_with_num_steps(self):
         """Test initialization with explicit num_steps."""
         kernel_spec = {"shape": "box", "params": {}}
         tc = TemporalUnfold(kernel_spec=kernel_spec, out_dt=0.1, num_steps=20, duration=2.0)
+        assert tc.time_axis.numel() == 20
+
+    def test_initialization_with_num_steps_only(self):
+        """Test initialization when only explicit num_steps is provided."""
+        kernel_spec = {"shape": "box", "params": {}}
+        tc = TemporalUnfold(kernel_spec=kernel_spec, out_dt=0.1, num_steps=20)
         assert tc.time_axis.numel() == 20
 
     def test_inconsistent_parameters(self):

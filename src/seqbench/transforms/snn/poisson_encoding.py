@@ -24,6 +24,10 @@ class PoissonEncoding:
     no input grid; ``duration`` gives the physical spike-train duration in
     seconds.
 
+    By default, input values are interpreted directly as firing rates in Hz.
+    Set ``normalize=True`` only when the input should be min-max normalized to
+    ``[0, max_rate]`` before sampling.
+
     Spike probability is computed correctly via:
         p = 1 - exp(-rate * dt)
 
@@ -35,7 +39,7 @@ class PoissonEncoding:
         duration: float = None,
         spike_dt: float = 0.001,
         max_rate: float = 100.0,
-        normalize: bool = True,
+        normalize: bool = False,
         frozen_noise: bool = False,
         seed: int = None,
     ):
@@ -51,9 +55,10 @@ class PoissonEncoding:
             Output spike-grid resolution in seconds per row. Default
             1 ms = 0.001.
         max_rate : float
-            Maximum firing rate in Hz.
+            Maximum firing rate in Hz when ``normalize=True``.
         normalize : bool
-            If True, normalize input to [0, max_rate].
+            If True, normalize input to [0, max_rate]. If False, input is
+            treated as rates in Hz.
         seed : int
             Random seed for reproducibility.
         frozen_noise : bool

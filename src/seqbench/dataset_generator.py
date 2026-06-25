@@ -277,6 +277,9 @@ class DatasetGenerator:
         dataset_size: int = 0,
         output_dir: Optional[str] = None,
         config_file_path: Optional[str] = None,
+        config_snapshot: Optional[dict] = None,
+        manifest: Optional[dict] = None,
+        split: Optional[str] = None,
         generate_train: bool = False,
         generate_test: bool = False,
         append_hash_to_output_dir: bool = False,
@@ -297,6 +300,9 @@ class DatasetGenerator:
         self.dataset_size = dataset_size
         self.output_dir = output_dir
         self.config_file_path = config_file_path
+        self.config_snapshot = config_snapshot
+        self.manifest = manifest
+        self.split = split
         self.generate_train = generate_train
         self.generate_test = generate_test
         self.append_hash_to_output_dir = append_hash_to_output_dir
@@ -394,7 +400,9 @@ class DatasetGenerator:
         os.makedirs(self.output_dir, exist_ok=True)
 
         print(f"Generating in {self.output_dir}!")
-        if self.generate_train:
+        if self.split is not None:
+            self.__generate_for_dataset(self.split, self.dataset_size)
+        elif self.generate_train:
             # self.__generate_for_dataset_parallelize('train', self.dataset_size)
             self.__generate_for_dataset("train", self.dataset_size)
 
@@ -403,6 +411,7 @@ class DatasetGenerator:
             self.__generate_for_dataset("test", self.dataset_size)
 
         self.__write_config_to_file()
+        self.__write_manifest_to_file()
         if hasattr(self.seq_generator.source, "transitions"):
             self.__write_transitions_to_file()
 
@@ -471,13 +480,21 @@ class DatasetGenerator:
         print(f"Writing config!")
 
         if self.config_file_path is None:
-            config = {}
+            config = self.config_snapshot or {}
         else:
             with open(self.config_file_path, "r") as f:
                 config = yaml.safe_load(f)
 
         with open(os.path.join(self.output_dir, "config.yaml"), "w") as file:
             file.write(yaml.safe_dump(config))
+
+    def __write_manifest_to_file(self) -> None:
+        """Write generated dataset metadata."""
+        if self.manifest is None:
+            return
+        print("Writing manifest!")
+        with open(os.path.join(self.output_dir, "manifest.yaml"), "w") as file:
+            file.write(yaml.safe_dump(self.manifest, sort_keys=True))
 
     def __write_transitions_to_file(self) -> None:
         """Write transition data to file."""

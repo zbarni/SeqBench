@@ -12,11 +12,11 @@ from seqbench.transforms.base import TransformTimeSpec
 logger = logging.getLogger(__name__)
 
 try:
-    from torchaudio.transforms import MelSpectrogram, AmplitudeToDB
+    from torchaudio.transforms import MelSpectrogram
 
     HAS_TORCHAUDIO = True
 except ImportError:
-    logger.warning("MFCC not loaded")
+    logger.warning("LogMel not loaded. torchaudio not installed?")
     HAS_TORCHAUDIO = False
 
 
@@ -62,7 +62,10 @@ class LogMel:
             Additional keyword arguments for the MelSpectrogram.
         """
         if not HAS_TORCHAUDIO:
-            raise ImportError("MelSpectrogram not found, please ensure torchaudio is available")
+            raise ImportError(
+                "torchaudio is required for LogMel. "
+                "Install SeqBench with the audio extra: pip install 'seqbench[audio]'."
+            )
 
         self.sample_rate = sample_rate
         self.hop_length = hop_length

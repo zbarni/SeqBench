@@ -27,6 +27,8 @@ class BinAlongAxis:
         reduction : str
             "sum", "mean", "binary"
         """
+        if reduction not in {"sum", "mean", "binary"}:
+            raise ValueError("reduction must be one of 'sum', 'mean', or 'binary'")
         self.bin_size = bin_size
         self.bin_axis = bin_axis
         self.reduction = reduction
@@ -65,7 +67,7 @@ class BinAlongAxis:
             out = x_binned.sum(dim=-1)
         elif self.reduction == "binary":
             out = x_binned.sum(dim=-1) > 0
-        else:  # "mean"
+        else:
             out = x_binned.mean(dim=-1)
 
         # Move axis back to original position

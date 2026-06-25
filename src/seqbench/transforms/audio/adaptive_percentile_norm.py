@@ -17,6 +17,11 @@ class AdaptivePercentileNorm:
     """
 
     def __init__(self, floor_percentile=5.0, ceil_percentile=95.0):
+        if not 0.0 <= floor_percentile < ceil_percentile <= 100.0:
+            raise ValueError(
+                "percentiles must satisfy 0 <= floor_percentile < "
+                "ceil_percentile <= 100"
+            )
         self.floor_percentile = floor_percentile
         self.ceil_percentile = ceil_percentile
 

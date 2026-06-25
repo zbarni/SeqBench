@@ -46,7 +46,10 @@ class MFCC:
             interval is ``hop_length / sample_rate`` seconds.
         """
         if not TORCHAUDIO_AVAILABLE:
-            raise ImportError("MFCC not loaded. torchaudio not installed?")
+            raise ImportError(
+                "torchaudio is required for MFCC. "
+                "Install SeqBench with the audio extra: pip install 'seqbench[audio]'."
+            )
 
         self.n_mfcc = n_mfcc
         self.n_mels = n_mels
