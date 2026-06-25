@@ -12,6 +12,7 @@ temporal processing, and various sequence tasks.
 # Standard library imports
 import os
 import logging
+import warnings
 from dataclasses import dataclass
 from typing import Optional, Any
 
@@ -28,6 +29,7 @@ from seqbench.seq_utils.symbol_encoder import SymbolEncoder
 from seqbench.dataset_generator import DatasetGenerator, RestrictedTargetProbGenerator
 from seqbench.tasks.classify import Classification, StateClassification
 from seqbench.tasks.target_builder import TaskTargetBuilder
+from seqbench.transforms.base import TimeGrid
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -104,6 +106,7 @@ class SeqDataset(Dataset):
         not_temporal: bool = False,
         load_to_tensor: Optional[callable] = None,
         transform: Optional[callable] = None,
+        initial_time_grid: Optional[TimeGrid] = None,
         dataset_root: Optional[str] = None,
     ) -> None:
         """
@@ -121,6 +124,7 @@ class SeqDataset(Dataset):
             not_temporal: If True, treat data as non-temporal (default: False).
             load_to_tensor: Optional function to convert data to tensors.
             transform: Optional transform to apply to data samples.
+            initial_time_grid: Optional native time grid for base dataset output.
             dataset_root: Root directory for dataset storage (default: None).
         """
         self._init_from_run_cfg(config, dataset_size, config_file_path)
@@ -128,6 +132,7 @@ class SeqDataset(Dataset):
         self.base_dataset = base_dataset
         self.is_train = is_train
         self.transform = transform
+        self.initial_time_grid = initial_time_grid
         self.generator = generator
         self.dataset_root = dataset_root
         self.pad_index = pad_index
@@ -147,6 +152,10 @@ class SeqDataset(Dataset):
             torch.manual_seed(self._seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed(self._seed)
+
+        expected_grid = TimeGrid(dt=self._final_dt)
+        self._time_grid = self._resolve_time_grid(initial_time_grid, expected_grid)
+        self._dt = self._time_grid.dt
 
         base_sample = self.load_to_tensor(self.base_dataset[0][0])
         if self.not_temporal:
@@ -203,9 +212,8 @@ class SeqDataset(Dataset):
         seqbench_seed = run_cfg.seqbench.seed if run_cfg.seqbench is not None else None
         self._seed = seqbench_seed if seqbench_seed is not None else run_cfg.dataset.seed
         self.dataset_size = dataset_size
-        # Global grid resolution (seconds/timestep): single source of truth for
-        # converting both stimulus and gap real-time durations into steps.
-        self._dt = run_cfg.seqbench.dt
+        self._final_dt = run_cfg.seqbench.time_grid.dt
+        self._time_validation = run_cfg.seqbench.time_grid.validation
         self.read_from_file = (
             run_cfg.seqbench.mode == "file"
         )  # TODO self.config['read_from_file']
@@ -237,6 +245,32 @@ class SeqDataset(Dataset):
             )
         else:
             self._gap_profile = None
+
+    def _resolve_time_grid(self, initial_time_grid, expected_grid):
+        if self.transform is not None:
+            return self.transform.resolve_time_grid(
+                initial_grid=initial_time_grid,
+                expected_final_grid=expected_grid,
+                validation=self._time_validation,
+            )
+
+        resolved = initial_time_grid or expected_grid
+        self._validate_dt(
+            "base dataset",
+            resolved.dt,
+            expected_grid.dt,
+            self._time_validation,
+        )
+        return resolved
+
+    def _validate_dt(self, name, actual, expected, validation):
+        if abs(actual - expected) <= 1e-9:
+            return
+        msg = f"{name} time-grid mismatch: got dt={actual:g}s, expected dt={expected:g}s"
+        if validation == "error":
+            raise ValueError(msg)
+        if validation == "warn":
+            warnings.warn(msg, stacklevel=3)
 
     def _derive_output_structure(self):
         """Decide the output path from the configured task.
@@ -430,17 +464,12 @@ class SeqDataset(Dataset):
             if self.rng.random() > gp.gap_prob:
                 delay = 0
             elif isinstance(gp.duration, dict) and "dist" in gp.duration:
-                delay = np.round(
-                    gp.duration["dist"](**gp.duration["params"]),
-                    decimals=1,
-                )
+                delay = float(gp.duration["dist"](**gp.duration["params"]))
             else:
-                delay = gp.duration
+                delay = float(gp.duration)
 
-        # Single conversion shared by both gap modes: real-time seconds -> grid
-        # steps at the global resolution. This is the same axis the stimulus uses
-        # (stimulus footprint = round(duration / dt)), so stimulus:gap ratios are
-        # preserved across any choice of dt.
+        # Single conversion shared by both gap modes: real-time seconds -> rows
+        # on the resolved final grid used by the returned sample.
         gap_steps = round(delay / self._dt)
 
         if gp.add_nongramm_gap:
@@ -462,6 +491,8 @@ class SeqDataset(Dataset):
                         )
 
                     delay_content = reshape(self.base_dataset[delay_idx][0])
+                    if self.transform:
+                        delay_content = self.transform(delay_content)
                     remaining = gap_steps - accumulated
                     if delay_content.shape[0] > remaining:
                         delay_content = delay_content[:remaining]

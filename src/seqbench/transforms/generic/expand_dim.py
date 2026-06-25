@@ -7,6 +7,8 @@ Dimension expansion transform for adding dimensions to tensors.
 
 import torch
 
+from seqbench.transforms.base import TransformTimeSpec
+
 
 class ExpandDim:
     """
@@ -22,6 +24,11 @@ class ExpandDim:
         """"""
         self.axis = axis
         self.target_size = target_size
+
+    def time_spec(self, input_grid):
+        if input_grid is not None and self.axis == 0:
+            raise ValueError("ExpandDim(axis=0) cannot preserve an existing time grid")
+        return TransformTimeSpec("preserve")
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """

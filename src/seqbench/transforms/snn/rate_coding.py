@@ -7,6 +7,8 @@ Rate coding transform for converting continuous values to spike rates.
 
 import torch
 
+from seqbench.transforms.base import TransformTimeSpec
+
 
 class RateCoding:
     """
@@ -51,6 +53,9 @@ class RateCoding:
         self.clamp = clamp
         self.eps = eps
 
+    def time_spec(self, input_grid):
+        return TransformTimeSpec("preserve")
+
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """
         Convert arbitrary input tensor into non-negative rate values.
@@ -71,11 +76,13 @@ class RateCoding:
 
         #     # Scale to [0,1]
         #     x = (x - x_min) / (x_max - x_min + self.eps)
+        # Optionally normalize to [0, 1] before scaling so the output spans
+        # [0, max_rate] regardless of the input's range.
         if self.normalize:
             x_min, x_max = x.min(), x.max()
             if x_max <= x_min:
                 return torch.zeros_like(x)
-            rates = (x - x_min) / (x_max - x_min)
+            x = (x - x_min) / (x_max - x_min)
 
         # Scale to rate
         rates = x * self.max_rate

@@ -23,7 +23,7 @@ except ImportError:
 from seqbench import config as cfg_mod
 from seqbench.seq_dataset import SeqDataset, make_pad_sequence
 from seqbench.utils import get_config_hash
-from seqbench.dataset import create_base_dataset_from_config
+from seqbench.dataset import create_base_dataset_from_config, initial_time_grid_from_config
 from seqbench.transforms import compose_transforms_from_config
 
 pytestmark = pytest.mark.skipif(not HAS_SYMSEQ, reason="symseq not available")
@@ -56,6 +56,7 @@ def _raw(task, *, symseq_tasks=None, generator=None, combine=False, mode="online
             "mode": mode,
             "prob_generator_type": "restricted",
             "storage": {"path": storage_path},
+            "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": combine, "sample_length": 20},
             "input_mapping": {"base": "one_hot", "base_params": {}, "transforms": []},
             "task": task,
@@ -77,7 +78,10 @@ def _build_dataset(raw, *, dataset_root=None, config_file_path=None, size=8):
     if inp_map.base == "one_hot":
         kwargs["alphabet_size"] = len(source.alphabet)
     base_dataset = create_base_dataset_from_config(
-        inp_map, "train", dt=run_cfg.seqbench.dt, **kwargs
+        inp_map, "train", final_dt=run_cfg.seqbench.time_grid.dt, **kwargs
+    )
+    initial_time_grid = initial_time_grid_from_config(
+        inp_map, final_dt=run_cfg.seqbench.time_grid.dt
     )
     transforms = compose_transforms_from_config(inp_map)
     return SeqDataset(
@@ -90,6 +94,7 @@ def _build_dataset(raw, *, dataset_root=None, config_file_path=None, size=8):
         pad_index=-1,
         dataset_root=dataset_root,
         transform=transforms,
+        initial_time_grid=initial_time_grid,
     )
 
 
@@ -248,6 +253,7 @@ def test_label_source_base_reads_from_base_dataset():
             "mode": "online",
             "prob_generator_type": "restricted",
             "storage": {"path": "/tmp/sb_label_base_test"},
+            "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 1},
             "input_mapping": {"base": "shd", "base_params": {}, "transforms": []},
             "task": {"source": "seqbench", "type": "Classification",

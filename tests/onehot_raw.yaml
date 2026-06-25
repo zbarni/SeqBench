@@ -27,7 +27,8 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
-  dt: 0.1
+  time_grid:
+    dt: 0.1
   storage:
     path: "data/SeqBench"
     force_rebuild: false

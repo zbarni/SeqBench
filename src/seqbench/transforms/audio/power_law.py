@@ -7,6 +7,8 @@ Power law transform for audio signal processing.
 
 import torch
 
+from seqbench.transforms.base import TransformTimeSpec
+
 
 class PowerLaw:
     """
@@ -16,6 +18,9 @@ class PowerLaw:
 
     def __init__(self, gamma=5.0):
         self.gamma = gamma
+
+    def time_spec(self, input_grid):
+        return TransformTimeSpec("preserve")
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         return torch.pow(x, self.gamma)

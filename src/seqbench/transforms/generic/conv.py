@@ -2,7 +2,7 @@
 # Copyright (c) 2025-present, SeqBench Contributors
 
 """
-Temporal convolution transform for sequence data processing.
+Temporal unfolding and filtering transforms for sequence data processing.
 """
 
 import seaborn as sns
@@ -15,6 +15,7 @@ from typing import Optional
 import logging
 
 from seqbench.transforms.generic.utils import get_device_and_dtype
+from seqbench.transforms.base import TransformTimeSpec
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,11 @@ def make_temporal_kernel(
     shape : str
         Kernel type {'box', 'exp', 'alpha', 'double_exp', 'gauss', 'tri', 'sin'}
     width : float, optional
-        Kernel width, by default 3.0
+        Kernel width in seconds, by default 3.0.
     height : float, optional
         Peak amplitude of the kernel, by default 1.0
     dt : float, optional
-        Time step resolution, by default 1.0
+        Kernel sampling interval in seconds per point, by default 1.0.
     normalize : bool, optional
         Whether to normalize the kernel, by default False
     device : torch.device, optional
@@ -130,22 +131,28 @@ def make_temporal_kernel(
     return k
 
 
-class TemporalConvolution:
-    # TODO better TemporalUnfolding?
+class TemporalUnfold:
+    """Expand a static tensor into a temporal kernel response.
+
+    The input is treated as non-temporal feature data. The transform creates a
+    new leading time axis sampled at ``out_dt`` seconds per row and places one
+    impulse response per active input value. ``duration`` and kernel time
+    constants are also expressed in seconds.
+    """
 
     def __init__(
         self,
         kernel_spec,
-        dt,
+        out_dt,
         duration=None,
         num_steps=None,
         amplitude: float | dict = 1.0,
-        spike_pos="start",
+        impulse_pos="start",
         **torch_kwargs,
     ):
         """
-        Unfolds a (static) tensor into a continuous signal, i.e., it converts the input tensor into temporal kernel responses
-        while adding a time dimension.
+        Unfolds a static tensor into a temporal kernel response by adding a
+        leading time axis.
 
 
         Parameters
@@ -153,39 +160,31 @@ class TemporalConvolution:
         kernel_spec : dict
             Tuple of (kernel_type, kernel_params) where kernel_type is a string and
             kernel_params is a dict of parameters for the kernel
-        dt : float
-            Time step resolution used for the kernel and sample time axis.
-        amp : float or torch.Tensor, optional
+        out_dt : float
+            Output grid resolution in seconds per row.
+        amplitude : float or torch.Tensor, optional
             Amplitude scaling factor. Can be scalar, tensor broadcastable to `x`, or a distribution. Default is 1.0.
         duration : float, optional
-            Duration of unfolded signal in seconds. If None, this is inferred from the time axis based on `dt` and
-            `num_steps`.
+            Physical duration of unfolded signal in seconds. If ``num_steps`` is
+            omitted, the output length is ``floor(duration / out_dt)``.
         num_steps : int, optional
-            Number of discrete time steps in the unfolded signal. If None, this is inferred from the time axis based on `dt`
-            and `duration` as `int(np.floor(duration / dt))`.
-        spike_position : str, int, or float, optional
+            Dimensionless output row count. If both ``duration`` and
+            ``num_steps`` are supplied, they must satisfy
+            ``num_steps == floor(duration / out_dt)``.
+        impulse_pos : str or int, optional
             Where to center the kernel response:
             - 'center': middle of time axis
             - 'start': beginning of time axis
             - 'end': end of time axis
             - int: specific time index
             - float: specific time value (will find nearest index)
-            By default 'center'
+            By default 'start'.
 
         Returns
         -------
         torch.Tensor
-            Output tensor with shape (*inp_tensor.shape, len(time_axis)).
-            Each active element in inp_tensor becomes a temporal kernel response.
-
-        Examples
-        --------
-        >>> # Create a 2D input tensor (batch x features)
-        >>> inp = torch.tensor([[1.0, 0.0, 0.5], [0.0, 1.0, 0.0]])
-        >>> time_axis = torch.linspace(0, 10, 100)
-        >>> kernel_spec = ('gauss', {'mu': 0.0, 'sigma': 1.0})
-        >>> result = convolve_tensor(inp, time_axis, kernel_spec, dt=0.1)
-        >>> print(result.shape)  # torch.Size([2, 3, 100])
+            Output tensor with shape (T, *x.shape).
+            Each active element in ``x`` becomes a temporal kernel response.
         """
 
         if not isinstance(kernel_spec, dict):  # config dict
@@ -204,28 +203,39 @@ class TemporalConvolution:
             amplitude = amplitude
 
         if isinstance(duration, dict):
-            rounding_precision = -(Decimal(str(dt)).as_tuple().exponent)  # nr of decimal digits
+            rounding_precision = -(Decimal(str(out_dt)).as_tuple().exponent)  # nr of decimal digits
             duration = np.round(duration["dist"](**duration["params"]), rounding_precision)
 
         self.kernel_spec = kernel_spec
-        self.dt = dt
+        self.out_dt = out_dt
         self.duration = duration
         self.amp = amplitude
-        self.spike_pos = spike_pos
+        self.impulse_pos = impulse_pos
+
+        bad = set(torch_kwargs) - {"device", "dtype"}
+        if bad:
+            raise ValueError(f"Unknown parameter(s) for TemporalUnfold: {sorted(bad)}")
 
         kwargs = kernel_spec["params"] | torch_kwargs
-        self.kernel = make_temporal_kernel(kernel_spec["shape"], height=1.0, dt=dt, normalize=False, **kwargs)
+        self.kernel = make_temporal_kernel(
+            kernel_spec["shape"], height=1.0, dt=out_dt, normalize=False, **kwargs
+        )
 
         if num_steps and duration:
-            if num_steps != int(np.floor(duration / dt)):
-                raise ValueError("When both are specified, dt, num_steps and duration must be consistent!")
+            if num_steps != int(np.floor(duration / out_dt)):
+                raise ValueError("When both are specified, out_dt, num_steps and duration must be consistent!")
         elif num_steps is None:
             assert duration
-            num_steps = int(np.floor(duration / dt))
+            num_steps = int(np.floor(duration / out_dt))
 
-        self.time_axis = torch.arange(num_steps) * dt
+        self.time_axis = torch.arange(num_steps) * out_dt
 
-    # def __call_NEW_WRONG__(self, x: torch.Tensor) -> torch.Tensor:
+    def time_spec(self, input_grid):
+        return TransformTimeSpec("create", out_dt=self.out_dt)
+
+    def expected_time_steps(self, input_steps, input_shape=None):
+        return self.time_axis.numel()
+
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """
         Parameters
@@ -237,23 +247,23 @@ class TemporalConvolution:
         -------
         torch.Tensor
             Output tensor with shape (T, *x.shape).
-            Each active element in inp_tensor becomes a temporal kernel response.
+            Each active element in ``x`` becomes a temporal kernel response.
         """
         # ----- 1. Determine spike index -----
         device, dtype = get_device_and_dtype(x)
         T = self.time_axis.numel()
 
-        if isinstance(self.spike_pos, int):
-            idx = self.spike_pos
+        if isinstance(self.impulse_pos, int):
+            idx = self.impulse_pos
         else:
-            if self.spike_pos == "start":
+            if self.impulse_pos == "start":
                 idx = 0
-            elif self.spike_pos == "center":
+            elif self.impulse_pos == "center":
                 idx = T // 2
-            elif self.spike_pos == "end":
+            elif self.impulse_pos == "end":
                 idx = T - 1
             else:
-                raise ValueError(f"Invalid spike_time_choose: {self.spike_pos}")
+                raise ValueError(f"Invalid impulse_pos: {self.impulse_pos}")
 
         # ----- 2. Compute amplitudes -----
         if self.amp is not None:
@@ -299,6 +309,73 @@ class TemporalConvolution:
         return conv
         # sns.heatmap(x.T, cmap="viridis")
         # plt.show()
+
+
+class TemporalFilter:
+    """Apply a causal temporal kernel to an existing leading time axis.
+
+    The transform requires a resolved input ``TimeGrid`` from ``Compose`` and
+    preserves that grid. Kernels are sampled using the input grid's ``dt``.
+    """
+
+    def __init__(self, kernel_spec, **torch_kwargs):
+        """
+        Apply a causal temporal filter to an existing leading time axis.
+
+        The input time grid is supplied by ``Compose.resolve_time_grid``. The
+        filter preserves the input grid resolution.
+        """
+        if not isinstance(kernel_spec, dict):  # config dict
+            if "shape" not in kernel_spec.keys() or "params" not in kernel_spec.keys():
+                raise ValueError("Incorrect / Incomplete kernel parameters are missing!")
+
+        bad = set(torch_kwargs) - {"device", "dtype"}
+        if bad:
+            raise ValueError(f"Unknown parameter(s) for TemporalFilter: {sorted(bad)}")
+
+        self.kernel_spec = kernel_spec
+        self.torch_kwargs = torch_kwargs
+        self.dt = None
+        self.kernel = None
+
+    def time_spec(self, input_grid):
+        if input_grid is None:
+            return TransformTimeSpec("require")
+        return TransformTimeSpec("preserve", expected_in_dt=input_grid.dt)
+
+    def bind_time_grid(self, input_grid, output_grid):
+        if input_grid is None:
+            raise ValueError("TemporalFilter requires an input time grid")
+        self.dt = input_grid.dt
+        kwargs = self.kernel_spec["params"] | self.torch_kwargs
+        self.kernel = make_temporal_kernel(
+            self.kernel_spec["shape"],
+            height=1.0,
+            dt=input_grid.dt,
+            normalize=False,
+            **kwargs,
+        )
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        if self.kernel is None:
+            raise RuntimeError(
+                "TemporalFilter requires Compose.resolve_time_grid() before it can be called"
+            )
+        if x.ndim < 1:
+            raise ValueError("TemporalFilter expects a leading time axis")
+
+        T = x.shape[0]
+        feature_shape = x.shape[1:]
+        kernel = self.kernel.to(x.device).float()
+        kernel_flipped = kernel.flip(0).view(1, 1, -1)
+        pad_left = kernel.numel() - 1
+
+        x_flat = x.reshape(T, -1).transpose(0, 1).unsqueeze(1)
+        x_padded = F.pad(x_flat, (pad_left, 0), mode="constant", value=0)
+        filtered = F.conv1d(x_padded, kernel_flipped, padding=0)
+        if filtered.shape[2] > T:
+            filtered = filtered[:, :, :T]
+        return filtered.squeeze(1).transpose(0, 1).reshape(T, *feature_shape)
         # sns.lineplot(kernel)
         # plt.show()
 

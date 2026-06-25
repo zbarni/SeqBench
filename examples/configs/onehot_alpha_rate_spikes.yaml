@@ -27,6 +27,8 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
+  time_grid:
+    dt: 0.001  # seconds per final output row
   storage:
     path: "data/SeqBench"
     force_rebuild: false
@@ -40,22 +42,21 @@ seqbench:
       - name: ExpandDim
         axis: 1
         target_size: 700
-      - name: TemporalConvolution
+      - name: TemporalUnfold
         kernel_spec:
           shape: "alpha"
           params:
-            tau: 20.0
-            width: 100.0
-        dt: 1.0
-        duration: 100.0
-        amp: 10.0
+            tau: 0.020    # seconds
+            width: 0.100  # seconds
+        out_dt: 0.001     # seconds per unfolded row
+        duration: 0.100   # seconds total
+        amplitude: 10.0
       - name: RateCoding
         max_rate: 100.0
         normalize: true
       - name: PoissonEncoding
         temporal: true
-        frame_dt: 0.001
-        spike_dt: 0.001
+        spike_dt: 0.001   # seconds per spike-bin row
   task:
     source: "symseq"
     name: "next_token"

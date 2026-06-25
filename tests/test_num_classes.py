@@ -86,6 +86,7 @@ def _raw(task, *, symseq_tasks=None, generator=None):
         "seqbench": {
             "mode": "online", "prob_generator_type": "restricted",
             "storage": {"path": "/tmp/sb_numclasses_test"},
+            "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},
             "input_mapping": {"base": "one_hot", "base_params": {}, "transforms": []},
             "task": task,
@@ -104,7 +105,7 @@ class TestSeqDatasetNumClasses:
         import torch
         from seqbench import config as cfg_mod
         from seqbench.seq_dataset import SeqDataset
-        from seqbench.dataset import create_base_dataset_from_config
+        from seqbench.dataset import create_base_dataset_from_config, initial_time_grid_from_config
         from seqbench.transforms import compose_transforms_from_config
 
         run_cfg = cfg_mod.load(raw)
@@ -112,12 +113,20 @@ class TestSeqDatasetNumClasses:
         source = build_symseq_source(run_cfg)
         inp_map = run_cfg.seqbench.input_mapping
         base_dataset = create_base_dataset_from_config(
-            inp_map, "train", alphabet_size=len(source.alphabet))
+            inp_map,
+            "train",
+            final_dt=run_cfg.seqbench.time_grid.dt,
+            alphabet_size=len(source.alphabet),
+        )
+        initial_time_grid = initial_time_grid_from_config(
+            inp_map, final_dt=run_cfg.seqbench.time_grid.dt
+        )
         transforms = compose_transforms_from_config(inp_map)
         return SeqDataset(
             config=run_cfg, generator=source, base_dataset=base_dataset,
             is_train=True, dataset_size=8, config_file_path=None,
-            pad_index=-1, dataset_root=None, transform=transforms)
+            pad_index=-1, dataset_root=None, transform=transforms,
+            initial_time_grid=initial_time_grid)
 
     _SYMSEQ_NEXT = dict(
         task={"source": "symseq", "name": "next_token"},

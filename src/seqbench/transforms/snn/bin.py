@@ -7,6 +7,8 @@ Binning transform for spiking neural network data along specified axes.
 
 import torch
 
+from seqbench.transforms.base import TransformTimeSpec
+
 
 class BinAlongAxis:
     """
@@ -28,6 +30,18 @@ class BinAlongAxis:
         self.bin_size = bin_size
         self.bin_axis = bin_axis
         self.reduction = reduction
+
+    def time_spec(self, input_grid):
+        if self.bin_axis != 0:
+            return TransformTimeSpec("preserve")
+        if input_grid is None:
+            return TransformTimeSpec("require")
+        return TransformTimeSpec("resample", out_dt=input_grid.dt * self.bin_size)
+
+    def expected_time_steps(self, input_steps, input_shape=None):
+        if self.bin_axis != 0:
+            return None
+        return input_steps // self.bin_size
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         # Normalize axis for negative indexing

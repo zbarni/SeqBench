@@ -11,7 +11,20 @@ This package provides tools for:
 - Transform pipelines for data preprocessing
 """
 
-from seqbench.dataset import create_base_dataset_from_config
-from seqbench.seq_dataset import SeqDataset
+__all__ = ['create_base_dataset_from_config', 'initial_time_grid_from_config', 'SeqDataset']
 
-__all__ = ['create_base_dataset_from_config', 'SeqDataset']
+
+def __getattr__(name):
+    if name in {"create_base_dataset_from_config", "initial_time_grid_from_config"}:
+        from seqbench.dataset import create_base_dataset_from_config, initial_time_grid_from_config
+
+        values = {
+            "create_base_dataset_from_config": create_base_dataset_from_config,
+            "initial_time_grid_from_config": initial_time_grid_from_config,
+        }
+        return values[name]
+    if name == "SeqDataset":
+        from seqbench.seq_dataset import SeqDataset
+
+        return SeqDataset
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -72,7 +72,6 @@ seqbench:
                 normalize: True
             PoissonEncoding:
                 temporal: True  
-                frame_dt: 0.01  # in seconds  # corresponds to bin_size
                 spike_dt: 0.001  # in seconds
             BinAlongAxis:
                 bin_size: 5
@@ -99,4 +98,3 @@ seqbench:
 
         #     }
         # }
-

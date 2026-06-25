@@ -17,11 +17,10 @@ NOT touch disk. Those steps belong to the loader that consumes a parsed
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 # ----------------------------- enums ------------------------------------------
@@ -192,6 +191,28 @@ class SeqbenchStorageCfg:
 
 
 @dataclass
+class TimeGridCfg:
+    """Final output time-grid configuration for SeqBench samples.
+
+    ``dt`` is the duration, in seconds, represented by one row of the final
+    tensor after all transforms. ``validation`` controls how mismatches between
+    declared and resolved transform grids are handled.
+    """
+
+    dt: float
+    validation: Literal["error", "warn", "ignore"] = "error"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dt, (int, float)) or self.dt <= 0:
+            raise ValueError(f"seqbench.time_grid.dt must be a positive number, got {self.dt!r}")
+        if self.validation not in ("error", "warn", "ignore"):
+            raise ValueError(
+                "seqbench.time_grid.validation must be 'error', 'warn', or 'ignore', "
+                f"got {self.validation!r}"
+            )
+
+
+@dataclass
 class GapProfileCfg:
     start: int = 0
     duration: dict[str, Any] = field(default_factory=dict)
@@ -259,23 +280,18 @@ class SeqbenchTaskCfg:
 class SeqbenchCfg:
     mode: str
     storage: SeqbenchStorageCfg
+    time_grid: TimeGridCfg
     composition: CompositionCfg
     input_mapping: InputMappingCfg
     task: SeqbenchTaskCfg
     seed: int | None = None
     prob_generator_type: str = "restricted"
-    # Global grid resolution in seconds. Single source of truth shared by the
-    # encoding (stimulus duration -> steps) and the gap profile (gap seconds ->
-    # steps). See input_mapping.base_params.duration and gap_profile.duration.
-    dt: float = 0.1
 
     def __post_init__(self) -> None:
         if self.mode not in ("file", "offline", "online"):
             raise ValueError(
                 f"seqbench.mode must be 'file' | 'offline' | 'online', got {self.mode!r}"
             )
-        if not isinstance(self.dt, (int, float)) or self.dt <= 0:
-            raise ValueError(f"seqbench.dt must be a positive number, got {self.dt!r}")
 
 
 # ----------------------------- root -------------------------------------------
@@ -373,35 +389,21 @@ def _parse_symseq(raw: dict) -> SymseqCfg:
 
 
 def _parse_seqbench(raw: dict) -> SeqbenchCfg:
+    if "dt" in raw:
+        raise ValueError("seqbench.dt is no longer supported; use seqbench.time_grid.dt")
     _require_keys(
         raw,
-        {"mode", "storage", "composition", "input_mapping", "task"},
+        {"mode", "storage", "time_grid", "composition", "input_mapping", "task"},
         where="seqbench",
     )
     storage = SeqbenchStorageCfg(**raw["storage"])
+    time_grid = TimeGridCfg(**raw["time_grid"])
     comp_raw = dict(raw["composition"])
     gp_raw = dict(comp_raw.pop("gap_profile", None) or {}) or None
-
-    # Resolve the global grid resolution `dt`. Canonical home is seqbench.dt.
-    # Back-compat: lift a legacy gap_profile.dt up to seqbench.dt (deprecated).
-    dt = raw.get("dt")
     if gp_raw is not None and "dt" in gp_raw:
-        legacy_dt = gp_raw.pop("dt")
-        if dt is None:
-            warnings.warn(
-                "gap_profile.dt is deprecated; move it to the top-level seqbench.dt. "
-                f"Using gap_profile.dt={legacy_dt!r} as seqbench.dt.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            dt = legacy_dt
-        else:
-            warnings.warn(
-                "Both seqbench.dt and the deprecated gap_profile.dt are set; "
-                f"ignoring gap_profile.dt={legacy_dt!r} in favor of seqbench.dt={dt!r}.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        raise ValueError(
+            "composition.gap_profile.dt is no longer supported; use seqbench.time_grid.dt"
+        )
 
     composition = CompositionCfg(
         **comp_raw,
@@ -412,12 +414,12 @@ def _parse_seqbench(raw: dict) -> SeqbenchCfg:
     return SeqbenchCfg(
         mode=raw["mode"],
         storage=storage,
+        time_grid=time_grid,
         composition=composition,
         input_mapping=input_mapping,
         task=task,
         seed=raw.get("seed"),
         prob_generator_type=raw.get("prob_generator_type", "restricted"),
-        dt=dt if dt is not None else SeqbenchCfg.dt,
     )
 
 

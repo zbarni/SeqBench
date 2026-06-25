@@ -15,6 +15,7 @@ from pathlib import Path
 
 from seqbench.transforms.compose import Compose
 from seqbench.transforms.functional import FunctionalTransform
+from seqbench.transforms.base import DeclaredTimeBehavior, TransformTimeSpec
 
 try:
     import torch
@@ -75,6 +76,27 @@ def _normalize_params(params):
     return normalized
 
 
+def _parse_time_behavior(raw):
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = {"kind": raw}
+    if not isinstance(raw, dict):
+        raise ValueError("time_behavior must be a string or dict")
+
+    kind = raw.get("kind")
+    if kind not in {"preserve", "create", "resample", "require", "unknown"}:
+        raise ValueError(
+            "time_behavior.kind must be one of "
+            "'preserve', 'create', 'resample', 'require', or 'unknown'"
+        )
+    return TransformTimeSpec(
+        kind,
+        out_dt=raw.get("out_dt"),
+        expected_in_dt=raw.get("expected_in_dt"),
+    )
+
+
 def compose_transforms_from_config(input_mapping):
     """
     Create a Compose object from the transforms defined in an
@@ -98,6 +120,7 @@ def compose_transforms_from_config(input_mapping):
     transforms = []
     for name, params in items:
         params = _normalize_params(params or {})
+        time_spec = _parse_time_behavior(params.pop("time_behavior", None))
 
         try:
             # Handle dotted paths (e.g., "tonic.transforms.ToFrame")
@@ -119,6 +142,8 @@ def compose_transforms_from_config(input_mapping):
         except Exception as e:
             raise RuntimeError(f"Could not create transform {name} with params {params}") from e
 
+        if time_spec is not None:
+            t = DeclaredTimeBehavior(t, time_spec)
         transforms.append(t)
 
     return Compose(transforms)

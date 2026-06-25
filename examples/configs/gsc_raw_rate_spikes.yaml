@@ -30,6 +30,8 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
+  time_grid:
+    dt: 0.001  # seconds per final output row
   storage:
     path: "data/SeqBench"
     force_rebuild: false
@@ -45,12 +47,12 @@ seqbench:
       return_raw: true
     transforms:
       - name: MFCC
-        sample_rate: 16000
+        sample_rate: 16000  # Hz
         n_mfcc: 13
         n_mels: 40
         n_fft: 512
-        win_length: 400
-        hop_length: 160
+        win_length: 400     # audio samples
+        hop_length: 160     # audio samples -> 0.01s at 16 kHz
       - name: AdaptivePercentileNorm
         floor_percentile: 10.0
         ceil_percentile: 90.0
@@ -64,8 +66,7 @@ seqbench:
         normalize: true
       - name: PoissonEncoding
         temporal: true
-        frame_dt: 0.01
-        spike_dt: 0.001
+        spike_dt: 0.001     # seconds per spike-bin row
       - name: BinAlongAxis
         bin_size: 5
         bin_axis: -1

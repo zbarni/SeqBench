@@ -49,24 +49,22 @@ seqbench:
           ExpandDim:
             axis: 1  # TODO how can the user keep track of this?
             target_size: 700
-          # this yields a temporal dimension of nb_steps = duration/dt = 100
-          TemporalConvolution:
+          # this yields a temporal dimension of nb_steps = duration/out_dt = 100
+          TemporalUnfold:
             kernel_spec:
               shape: "alpha"
               params:
-                tau: 20.0
-                width: 100.
-            dt: 1.
-            duration: 100.0
-            amp: 10.0
+                tau: 0.020
+                width: 0.100
+            out_dt: 0.001
+            duration: 0.100
+            amplitude: 10.0
 
           RateCoding:
             max_rate: 100.0
             normalize: True
 
           PoissonEncoding:
-            # TemporalConvolution from previous step adds a temporal dimension
+            # TemporalUnfold from previous step adds a temporal dimension
             temporal: True  
-            frame_dt: 0.001  # in seconds
             spike_dt: 0.001  # in seconds
-

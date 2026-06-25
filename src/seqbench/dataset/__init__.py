@@ -13,36 +13,46 @@ from configuration files. Supported datasets include:
 - Tonic datasets (DVSGesture, NMNIST, etc.)
 """
 
-import warnings
-
-from seqbench.dataset.shd_ssc import SpikingDataset
-from seqbench.dataset.speech_commands import SpeechCommands
-from seqbench.dataset.synthetic import OneHot
-from seqbench.dataset.tonic_wrapper import TonicDatasetWrapper, TONIC_DATASET_REGISTRY
+from seqbench.transforms.base import TimeGrid
 
 
-def _warn_native_dt_mismatch(base, nb_steps, max_time, dt):
-    """Warn if the global grid ``dt`` differs from a spiking dataset's native dt.
-
-    SHD/SSC bin spikes over ``max_time`` into ``nb_steps`` bins, fixing their
-    native resolution at ``max_time / nb_steps``. Under the single real-time
-    axis the global ``dt`` should match this; resampling is a future step, so
-    for now we only surface the mismatch.
-    """
-    if dt is None or not nb_steps:
-        return
-    native_dt = max_time / nb_steps
-    if abs(native_dt - dt) > 1e-9:
-        warnings.warn(
-            f"{base!r} has a native dt of {native_dt:g}s "
-            f"(max_time={max_time}/nb_steps={nb_steps}) but seqbench.dt={dt:g}s. "
-            "These stimuli are not resampled to the global grid; the time axis "
-            "will be inconsistent until dt matches the native resolution.",
-            stacklevel=2,
-        )
+_TIME_CREATING_TRANSFORMS = {"TemporalUnfold", "MFCC", "LogMel"}
 
 
-def create_base_dataset_from_config(input_mapping, split, dt=None, **kwargs):
+def has_time_creating_transform(input_mapping):
+    """Return True when config transforms create a new leading time axis."""
+    for transform in input_mapping.transforms:
+        behavior = transform.get("time_behavior")
+        if isinstance(behavior, str):
+            if behavior == "create":
+                return True
+        elif isinstance(behavior, dict) and behavior.get("kind") == "create":
+            return True
+
+        name = transform["name"].split(".")[-1]
+        if name in _TIME_CREATING_TRANSFORMS:
+            return True
+        if name == "PoissonEncoding" and not transform.get("temporal", False):
+            return True
+    return False
+
+
+def initial_time_grid_from_config(input_mapping, final_dt=None):
+    """Return the base dataset's native time grid, if it has one."""
+    bp = input_mapping.base_params
+    if input_mapping.base in {"shd", "ssc"}:
+        return TimeGrid(dt=bp["max_time"] / bp["nb_steps"])
+    if input_mapping.base == "gsc" and not bp.get("return_raw", False):
+        # SpeechCommands computes MFCCs internally with hop_length=160 and
+        # sample_rate=16000 when return_raw=False.
+        return TimeGrid(dt=160 / 16000)
+    if input_mapping.base == "one_hot" and final_dt is not None:
+        if not has_time_creating_transform(input_mapping):
+            return TimeGrid(dt=final_dt)
+    return None
+
+
+def create_base_dataset_from_config(input_mapping, split, final_dt=None, **kwargs):
     """
     Factory function to create a base dataset from an
     :class:`~seqbench.config.InputMappingCfg`.
@@ -50,15 +60,16 @@ def create_base_dataset_from_config(input_mapping, split, dt=None, **kwargs):
     Args:
         input_mapping: :class:`~seqbench.config.InputMappingCfg` instance.
         split: Dataset split ('train' or 'test').
-        dt: Global grid resolution in seconds (``seqbench.dt``). Used to convert
+        final_dt: Final grid resolution in seconds. Used to convert
             ``base_params.duration`` (seconds) into a stimulus step count for
-            one_hot, and to validate spiking datasets' native resolution.
+            one_hot.
         **kwargs: Additional keyword arguments (e.g. ``alphabet_size`` for one_hot).
     """
     bp = input_mapping.base_params  # plain dict of base-specific parameters
 
     if input_mapping.base == "shd":
-        _warn_native_dt_mismatch("shd", bp["nb_steps"], bp["max_time"], dt)
+        from seqbench.dataset.shd_ssc import SpikingDataset
+
         return SpikingDataset(
             "shd",
             bp["base_dataset_path"],
@@ -68,7 +79,8 @@ def create_base_dataset_from_config(input_mapping, split, dt=None, **kwargs):
             num_bins=bp.get("num_bins", 1),
         )
     if input_mapping.base == "ssc":
-        _warn_native_dt_mismatch("ssc", bp["nb_steps"], bp["max_time"], dt)
+        from seqbench.dataset.shd_ssc import SpikingDataset
+
         return SpikingDataset(
             "ssc",
             bp["base_dataset_path"],
@@ -78,6 +90,8 @@ def create_base_dataset_from_config(input_mapping, split, dt=None, **kwargs):
             num_bins=bp.get("num_bins", 1),
         )
     if input_mapping.base == "gsc":
+        from seqbench.dataset.speech_commands import SpeechCommands
+
         split = "training" if split == "train" else "testing"
         return SpeechCommands(
             data_folder=bp["base_dataset_path"],
@@ -85,17 +99,28 @@ def create_base_dataset_from_config(input_mapping, split, dt=None, **kwargs):
             return_raw=bp.get("return_raw", False),
         )
     if input_mapping.base == "one_hot":
+        from seqbench.dataset.synthetic import OneHot
+
         if "alphabet_size" not in kwargs:
             raise ValueError("alphabet_size must be provided for one_hot dataset!")
-        # Stimulus footprint = round(duration / dt) steps. Without a global dt
-        # (legacy callers) fall back to a single timestep. ``duration`` defaults
-        # to ``dt`` so an unspecified stimulus is exactly one step.
-        if dt is not None:
-            duration = bp.get("duration", dt)
-            n_steps = max(1, round(duration / dt))
+        creates_time = has_time_creating_transform(input_mapping)
+        if creates_time:
+            if "duration" in bp:
+                raise ValueError(
+                    "one_hot.base_params.duration cannot be used with a "
+                    "time-creating transform; put the duration on the transform"
+                )
+            n_steps = 1
+        elif final_dt is not None:
+            # Stimulus footprint = round(duration / final_dt) rows. ``duration``
+            # defaults to ``final_dt`` so an unspecified stimulus is one row.
+            duration = bp.get("duration", final_dt)
+            n_steps = max(1, round(duration / final_dt))
         else:
             n_steps = 1
         return OneHot(kwargs["alphabet_size"] + 1, n_steps=n_steps)
+    from seqbench.dataset.tonic_wrapper import TonicDatasetWrapper, TONIC_DATASET_REGISTRY
+
     if input_mapping.base.lower() in TONIC_DATASET_REGISTRY:
         canonical_name = TONIC_DATASET_REGISTRY[input_mapping.base.lower()]
         return TonicDatasetWrapper(

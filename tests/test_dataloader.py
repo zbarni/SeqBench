@@ -23,7 +23,7 @@ except ImportError:
 from seqbench import config as cfg_mod
 from seqbench.seq_dataset import SeqDataset, make_pad_sequence
 from seqbench.utils import get_config_hash
-from seqbench.dataset import create_base_dataset_from_config
+from seqbench.dataset import create_base_dataset_from_config, initial_time_grid_from_config
 from seqbench.transforms import compose_transforms_from_config
 
 
@@ -55,7 +55,12 @@ def dataset_setup():
     if inp_map.base == "one_hot":
         kwargs["alphabet_size"] = len(source.alphabet)
 
-    base_dataset = create_base_dataset_from_config(inp_map, "train", **kwargs)
+    base_dataset = create_base_dataset_from_config(
+        inp_map, "train", final_dt=run_cfg.seqbench.time_grid.dt, **kwargs
+    )
+    initial_time_grid = initial_time_grid_from_config(
+        inp_map, final_dt=run_cfg.seqbench.time_grid.dt
+    )
     transforms = compose_transforms_from_config(inp_map)
 
     config_hash = get_config_hash(run_cfg, dataset_size=dataset_size)
@@ -71,6 +76,7 @@ def dataset_setup():
         pad_index=-1,
         dataset_root=dataset_root,
         transform=transforms,
+        initial_time_grid=initial_time_grid,
     )
 
     return dataset, dataset_size, dataset.per_token_classify

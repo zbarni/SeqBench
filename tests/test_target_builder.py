@@ -204,6 +204,7 @@ def test_from_run_cfg_symseq_source():
         "seqbench": {
             "mode": "online",
             "storage": {"path": "/tmp/sb"},
+            "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},
             "input_mapping": {"base": "one_hot"},
             "task": {"source": "symseq", "name": "next_token"},
@@ -229,6 +230,7 @@ def test_from_run_cfg_seqbench_state_classification_requires_state_id_fn():
         "seqbench": {
             "mode": "online",
             "storage": {"path": "/tmp/sb"},
+            "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},
             "input_mapping": {"base": "one_hot"},
             "task": {"source": "seqbench", "type": "StateClassification"},

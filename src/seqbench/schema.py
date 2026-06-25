@@ -13,6 +13,7 @@ from seqbench.config import (  # noqa: F401
     SymseqStorageCfg,
     SymseqCfg,
     SeqbenchStorageCfg,
+    TimeGridCfg,
     GapProfileCfg,
     CompositionCfg,
     InputMappingCfg,

@@ -27,8 +27,8 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
-  # Global grid resolution in seconds (single source of truth for stimulus + gap).
-  dt: 0.1
+  time_grid:
+    dt: 0.01  # seconds per final output row (internal MFCC hop: 160 / 16000)
   storage:
     path: "data/SeqBench"
     force_rebuild: false

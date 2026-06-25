@@ -12,7 +12,7 @@ from seqbench import config as cfg_mod
 from seqbench.transforms import compose_transforms_from_config
 from seqbench.utils import get_config_hash
 from seqbench.seq_dataset import make_pad_sequence
-from seqbench.dataset import create_base_dataset_from_config
+from seqbench.dataset import create_base_dataset_from_config, initial_time_grid_from_config
 
 # symseq (via SeqBench's centralized boundary)
 from seqbench.sources import build_symseq_source
@@ -239,7 +239,15 @@ if __name__ == "__main__":
 
     # base dataset
     kwargs = {"alphabet_size": len(source.alphabet)}
-    base_dataset = create_base_dataset_from_config(inp_map, "train", **kwargs)
+    base_dataset = create_base_dataset_from_config(
+        inp_map,
+        "train",
+        final_dt=run_cfg.seqbench.time_grid.dt,
+        **kwargs,
+    )
+    initial_time_grid = initial_time_grid_from_config(
+        inp_map, final_dt=run_cfg.seqbench.time_grid.dt
+    )
 
     config_hash = get_config_hash(run_cfg, dataset_size=train_size)
     dataset_root = os.path.join(run_cfg.seqbench.storage.path, config_hash)
@@ -256,6 +264,7 @@ if __name__ == "__main__":
         pad_index=-1,
         dataset_root=dataset_root,
         transform=transforms,
+        initial_time_grid=initial_time_grid,
     )
 
     per_token_classify = seq_dataset.per_token_classify  # for the display branches below

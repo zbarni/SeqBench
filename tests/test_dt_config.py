@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025-present, SeqBench Contributors
 
-"""Tests for the global grid resolution ``seqbench.dt``: default, validation,
-and the back-compat shim that lifts a legacy ``gap_profile.dt`` to ``seqbench.dt``."""
+"""Tests for explicit final output time-grid configuration."""
 
 import pytest
 
 from seqbench import config as cfg_mod
+from seqbench.config import InputMappingCfg
+from seqbench.dataset import (
+    create_base_dataset_from_config,
+    initial_time_grid_from_config,
+)
 
 
 def _raw(**seqbench_overrides):
@@ -15,6 +19,7 @@ def _raw(**seqbench_overrides):
         "mode": "online",
         "prob_generator_type": "restricted",
         "storage": {"path": "/tmp/sb_dt_test"},
+        "time_grid": {"dt": 0.1},
         "composition": {"combine_sequences": False, "sample_length": 20},
         "input_mapping": {"base": "one_hot", "base_params": {}, "transforms": []},
         "task": {"source": "seqbench", "type": "StateClassification"},
@@ -31,23 +36,41 @@ def _raw(**seqbench_overrides):
     }
 
 
-def test_dt_defaults_to_point_one():
-    cfg = cfg_mod.load(_raw())
-    assert cfg.seqbench.dt == 0.1
+def test_time_grid_is_required():
+    seqbench = _raw()["seqbench"]
+    seqbench.pop("time_grid")
+    with pytest.raises(ValueError, match="missing required keys.*time_grid"):
+        cfg_mod.load({"dataset": _raw()["dataset"], "seqbench": seqbench})
 
 
-def test_dt_explicit_top_level():
-    cfg = cfg_mod.load(_raw(dt=0.05))
-    assert cfg.seqbench.dt == 0.05
+def test_time_grid_explicit():
+    cfg = cfg_mod.load(_raw(time_grid={"dt": 0.05}))
+    assert cfg.seqbench.time_grid.dt == 0.05
+    assert cfg.seqbench.time_grid.validation == "error"
+
+
+def test_time_grid_validation_mode():
+    cfg = cfg_mod.load(_raw(time_grid={"dt": 0.05, "validation": "warn"}))
+    assert cfg.seqbench.time_grid.validation == "warn"
 
 
 @pytest.mark.parametrize("bad", [0, -0.1, "x"])
-def test_dt_must_be_positive(bad):
-    with pytest.raises(ValueError, match="dt must be a positive"):
-        cfg_mod.load(_raw(dt=bad))
+def test_time_grid_dt_must_be_positive(bad):
+    with pytest.raises(ValueError, match="time_grid.dt must be a positive"):
+        cfg_mod.load(_raw(time_grid={"dt": bad}))
 
 
-def test_legacy_gap_profile_dt_is_lifted_with_warning():
+def test_time_grid_validation_must_be_known():
+    with pytest.raises(ValueError, match="time_grid.validation"):
+        cfg_mod.load(_raw(time_grid={"dt": 0.1, "validation": "whatever"}))
+
+
+def test_top_level_dt_is_rejected():
+    with pytest.raises(ValueError, match="seqbench.dt is no longer supported"):
+        cfg_mod.load(_raw(dt=0.1))
+
+
+def test_gap_profile_dt_is_rejected():
     raw = _raw(
         composition={
             "combine_sequences": False,
@@ -60,27 +83,62 @@ def test_legacy_gap_profile_dt_is_lifted_with_warning():
             },
         }
     )
-    with pytest.warns(DeprecationWarning, match="gap_profile.dt is deprecated"):
-        cfg = cfg_mod.load(raw)
-    assert cfg.seqbench.dt == 0.2
-    # The lifted value must not survive on the gap profile.
-    assert not hasattr(cfg.seqbench.composition.gap_profile, "dt")
+    with pytest.raises(ValueError, match="gap_profile.dt is no longer supported"):
+        cfg_mod.load(raw)
 
 
-def test_top_level_dt_wins_over_legacy_gap_profile_dt():
-    raw = _raw(
-        dt=0.1,
-        composition={
-            "combine_sequences": False,
-            "sample_length": 20,
-            "gap_profile": {
-                "start": 0,
-                "duration": {"dist": "uniform", "params": {"low": 5, "high": 5}},
-                "add_nongramm_gap": False,
-                "dt": 0.2,
-            },
-        },
+def test_one_hot_duration_creates_initial_grid_without_time_creator():
+    pytest.importorskip("torch")
+    mapping = InputMappingCfg(
+        base="one_hot",
+        base_params={"duration": 0.3},
+        transforms=[],
     )
-    with pytest.warns(DeprecationWarning, match="ignoring gap_profile.dt"):
-        cfg = cfg_mod.load(raw)
-    assert cfg.seqbench.dt == 0.1
+    grid = initial_time_grid_from_config(mapping, final_dt=0.1)
+    dataset = create_base_dataset_from_config(
+        mapping, "train", final_dt=0.1, alphabet_size=4
+    )
+    assert grid.dt == pytest.approx(0.1)
+    assert dataset.n_steps == 3
+
+
+def test_one_hot_duration_rejected_with_time_creator():
+    pytest.importorskip("torch")
+    mapping = InputMappingCfg(
+        base="one_hot",
+        base_params={"duration": 0.3},
+        transforms=[
+            {
+                "name": "TemporalUnfold",
+                "out_dt": 0.01,
+                "duration": 0.1,
+                "kernel_spec": {"shape": "box", "params": {"width": 0.1}},
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="one_hot.base_params.duration"):
+        create_base_dataset_from_config(
+            mapping, "train", final_dt=0.01, alphabet_size=4
+        )
+
+
+def test_one_hot_static_when_transform_creates_time():
+    pytest.importorskip("torch")
+    mapping = InputMappingCfg(
+        base="one_hot",
+        base_params={},
+        transforms=[
+            {
+                "name": "TemporalUnfold",
+                "out_dt": 0.01,
+                "duration": 0.1,
+                "kernel_spec": {"shape": "box", "params": {"width": 0.1}},
+            }
+        ],
+    )
+    grid = initial_time_grid_from_config(mapping, final_dt=0.01)
+    dataset = create_base_dataset_from_config(
+        mapping, "train", final_dt=0.01, alphabet_size=4
+    )
+    assert grid is None
+    assert dataset.n_steps == 1

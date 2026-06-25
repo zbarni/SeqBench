@@ -27,9 +27,8 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
-  # Global grid resolution in seconds. Single source of truth: both the stimulus
-  # duration and the gap duration (below, in seconds) convert to timesteps via dt.
-  dt: 0.1
+  time_grid:
+    dt: 0.1
   storage:
     path: "data/SeqBench"
     force_rebuild: false
@@ -42,8 +41,8 @@ seqbench:
       add_nongramm_gap: false
   input_mapping:
     base: "one_hot"
-    # duration (seconds): stimulus footprint = round(duration / dt) timesteps.
-    # Defaults to dt (a single timestep) when omitted.
+    # duration (seconds): stimulus footprint = round(duration / time_grid.dt) timesteps.
+    # Defaults to time_grid.dt (a single timestep) when omitted.
     base_params: {duration: 1.0}
     transforms: []
   task:

@@ -23,7 +23,7 @@ from seqbench import config as cfg_mod
 from seqbench.utils import get_config_hash
 from seqbench.seq_dataset import SeqDataset, make_pad_sequence
 from seqbench.sources import build_symseq_source
-from seqbench.dataset import create_base_dataset_from_config
+from seqbench.dataset import create_base_dataset_from_config, initial_time_grid_from_config
 from seqbench.transforms import compose_transforms_from_config
 
 __script_name__ = os.path.basename(__file__)
@@ -61,7 +61,10 @@ if __name__ == '__main__':
         kwargs['alphabet_size'] = len(source.alphabet)
 
     base_dataset = create_base_dataset_from_config(
-        inp_map, 'train', dt=run_cfg.seqbench.dt, **kwargs
+        inp_map, 'train', final_dt=run_cfg.seqbench.time_grid.dt, **kwargs
+    )
+    initial_time_grid = initial_time_grid_from_config(
+        inp_map, final_dt=run_cfg.seqbench.time_grid.dt
     )
     transforms = compose_transforms_from_config(inp_map)
 
@@ -78,6 +81,7 @@ if __name__ == '__main__':
         pad_index=-1,
         dataset_root=dataset_root,
         transform=transforms,
+        initial_time_grid=initial_time_grid,
     )
 
     seq_loader = torch.utils.data.DataLoader(

@@ -27,8 +27,9 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
-  # Global grid resolution in seconds (single source of truth for stimulus + gap).
-  dt: 0.1
+  time_grid:
+    dt: 0.01
+    validation: error
   storage:
     path: "data/SeqBench"
     force_rebuild: false
@@ -47,8 +48,10 @@ seqbench:
       - name: tonic.transforms.ToFrame
         sensor_size: [128, 128, 2]
         time_window: 10000.0
+        time_behavior: {kind: create, out_dt: 0.01}
       - name: torch.tensor
         dtype: torch.float32
+        time_behavior: preserve
       - name: CenterCrop
         sensor_size: [128, 128, 2]
         output_size: [10, 10]

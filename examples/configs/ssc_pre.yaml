@@ -27,10 +27,8 @@ symseq:
 seqbench:
   mode: "file"
   prob_generator_type: "restricted"
-  # Global grid resolution in seconds (single source of truth for stimulus + gap).
-  # Set to SSC's native resolution max_time/nb_steps = 1.4/140 = 0.01 so stimulus
-  # rows and gap rows share one real-time axis (one row == 0.01s everywhere).
-  dt: 0.01
+  time_grid:
+    dt: 0.01
   storage:
     path: "data/SeqBench"
     force_rebuild: false

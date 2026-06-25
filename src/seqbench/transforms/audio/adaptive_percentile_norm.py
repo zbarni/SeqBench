@@ -7,6 +7,8 @@ Adaptive percentile normalization transform for audio data.
 
 import torch
 
+from seqbench.transforms.base import TransformTimeSpec
+
 
 class AdaptivePercentileNorm:
     """
@@ -17,6 +19,9 @@ class AdaptivePercentileNorm:
     def __init__(self, floor_percentile=5.0, ceil_percentile=95.0):
         self.floor_percentile = floor_percentile
         self.ceil_percentile = ceil_percentile
+
+    def time_spec(self, input_grid):
+        return TransformTimeSpec("preserve")
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         # Compute percentiles

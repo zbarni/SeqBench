@@ -34,8 +34,8 @@ class OneHot:
             vocab_size: Number of unique tokens/classes in the vocabulary
             n_steps: Number of timesteps each stimulus occupies on the time
                 grid. The one-hot row is repeated ``n_steps`` times so the
-                stimulus footprint is ``round(duration / dt)`` steps. Defaults
-                to 1 (a single timestep).
+                caller can express a physical stimulus duration on the final
+                output grid. Defaults to 1 (a single timestep).
         """
 
         if n_steps < 1:

@@ -29,7 +29,7 @@ _BASE_STEPS = 1
 
 def _with_gap(raw, *, start=0):
     """Inject a deterministic gap profile into a raw config (in place)."""
-    raw["seqbench"]["dt"] = 0.1
+    raw["seqbench"]["time_grid"] = {"dt": 0.1}
     raw["seqbench"]["composition"]["gap_profile"] = {
         "start": start,
         "duration": {"dist": "uniform", "params": {"low": 0.5, "high": 0.5}},
@@ -214,16 +214,15 @@ def test_getitem_per_trial_classification_path_with_gaps():
 
 
 # ---------------------------------------------------------------------------
-# Single real-time axis: stimulus and gap both convert through the global dt,
-# so the per-element footprint is round(duration/dt) + round(gap_s/dt) and the
-# stimulus:gap ratio is invariant to the choice of dt.
+# Single real-time axis without time-creating transforms: stimulus and gap both
+# convert through the resolved final grid.
 # ---------------------------------------------------------------------------
 
 
 def _raw_onehot(*, dt, stim_s, gap_s):
     """Predict-path one_hot config with explicit dt and durations (seconds)."""
     raw = _raw(**_SYMSEQ_NEXT, combine=False)
-    raw["seqbench"]["dt"] = dt
+    raw["seqbench"]["time_grid"] = {"dt": dt}
     raw["seqbench"]["input_mapping"]["base_params"] = {"duration": stim_s}
     raw["seqbench"]["composition"]["gap_profile"] = {
         "start": 0,
@@ -246,7 +245,7 @@ def test_onehot_stimulus_footprint_from_duration():
 def test_onehot_duration_defaults_to_single_step():
     # No duration in base_params -> defaults to dt -> exactly one step.
     raw = _raw(**_SYMSEQ_NEXT, combine=False)
-    raw["seqbench"]["dt"] = 0.1
+    raw["seqbench"]["time_grid"] = {"dt": 0.1}
     ds = _build_dataset(raw)
     assert ds.base_dataset.n_steps == 1
 
@@ -267,3 +266,34 @@ def test_grid_is_scale_invariant_in_dt():
     # Same generator seed -> same symbolic sequence length.
     assert len(sample_c.target_seq) == len(sample_f.target_seq)
     assert ds_fine[0][0].shape[0] == 2 * ds_coarse[0][0].shape[0]
+
+
+def test_gap_duration_not_rounded_to_one_decimal():
+    ds = _build_dataset(_raw_onehot(dt=0.001, stim_s=0.001, gap_s=0.015))
+    sample = ds.gensample_to_sample(ds.gs.generate(0, compute_length=False))
+    data = ds[0][0]
+    assert data.shape[0] == len(sample.target_seq) * (1 + 15)
+
+
+def test_nongrammatical_gap_filler_uses_transform_pipeline():
+    raw = _raw(**_SYMSEQ_NEXT, combine=False)
+    raw["seqbench"]["time_grid"] = {"dt": 0.001}
+    raw["seqbench"]["input_mapping"]["base_params"] = {}
+    raw["seqbench"]["input_mapping"]["transforms"] = [
+        {
+            "name": "TemporalUnfold",
+            "kernel_spec": {"shape": "box", "params": {"width": 0.001}},
+            "out_dt": 0.001,
+            "duration": 0.010,
+        }
+    ]
+    raw["seqbench"]["composition"]["gap_profile"] = {
+        "start": 0,
+        "duration": {"dist": "uniform", "params": {"low": 0.015, "high": 0.015}},
+        "add_nongramm_gap": True,
+    }
+
+    ds = _build_dataset(raw)
+    sample = ds.gensample_to_sample(ds.gs.generate(0, compute_length=False))
+    data = ds[0][0]
+    assert data.shape[0] == len(sample.target_seq) * (10 + 15)
