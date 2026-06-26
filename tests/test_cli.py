@@ -96,7 +96,7 @@ def test_inspect_batch_prints_actual_batch_keys(monkeypatch):
 
 def test_invalid_config_exits_cleanly(tmp_path):
     config_path = tmp_path / "bad.yaml"
-    config_path.write_text("dataset: {}\n")
+    config_path.write_text("run: {}\n")
 
     result = runner.invoke(cli.app, ["validate", str(config_path)])
 

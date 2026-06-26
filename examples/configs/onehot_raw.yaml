@@ -1,50 +1,59 @@
-dataset:
+run:
   seed: 42
+
+symbol_space:
   alphabet:
     size: 4
-    eos: "#"
-  trial_length:
-    min: 1
-    max: 20
-  splits:
-    train: 100
-    test: 100
+  eos: "#"
 
 symseq:
   generator:
-    type: "ArtificialGrammar"
-    mode: "random"
+    type: ArtificialGrammar
+    mode: random
     params:
-      label: "Constrained Random Grammar"
+      label: Constrained Random Grammar
       ambiguities: 2
       ambiguity_depth: 2
       n_start_states: 1
       transition_density: 0.25
       assume_equiprobable: true
+  trial_constraints:
+    length:
+      min: 1
+      max: 20
   tasks:
-    - {name: "next_token", type: "NStepPrediction", params: {n: 1}}
+    - name: next_token
+      type: NStepPrediction
+      params:
+        n: 1
 
 seqbench:
-  mode: "file"
-  prob_generator_type: "restricted"
+  mode: file
+  prob_generator_type: restricted
+  splits:
+    train: 100
+    test: 100
   time_grid:
     dt: 0.1
   storage:
-    path: "data/SeqBench"
+    path: data/SeqBench
     force_rebuild: false
   composition:
     combine_sequences: true
     sample_length: 20
     gap_profile:
       start: 0
-      duration: {dist: "uniform", params: {low: 5, high: 5}}  # seconds
+      duration:
+        dist: uniform
+        params:
+          low: 5
+          high: 5
       add_nongramm_gap: false
   input_mapping:
-    base: "one_hot"
-    # duration (seconds): stimulus footprint = round(duration / time_grid.dt) timesteps.
-    # Defaults to time_grid.dt (a single timestep) when omitted.
-    base_params: {duration: 1.0}
+    base: one_hot
+    base_params:
+      duration: 1.0
     transforms: []
   task:
-    source: "symseq"
-    name: "next_token"
+    source: symseq
+    name: next_token

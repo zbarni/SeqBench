@@ -43,11 +43,9 @@ def test_generate_sequence_appends_eos():
     source, run_cfg = _source()
     gen = SequenceGenerator(
         source,
-        seq_len_min=run_cfg.dataset.trial_length.min,
-        seq_len_max=run_cfg.dataset.trial_length.max,
         combine_sequences=False,
         combined_seq_len=run_cfg.seqbench.composition.sample_length,
-        seed=run_cfg.dataset.seed,
+        seed=run_cfg.run.seed,
     )
     gs = gen.generate(idx=1, compute_length=True)
 
@@ -63,11 +61,9 @@ def test_generate_sequences_truncation():
     combined = run_cfg.seqbench.composition.sample_length
     gen = SequenceGenerator(
         source,
-        seq_len_min=run_cfg.dataset.trial_length.min,
-        seq_len_max=run_cfg.dataset.trial_length.max,
         combine_sequences=True,
         combined_seq_len=combined,
-        seed=run_cfg.dataset.seed,
+        seed=run_cfg.run.seed,
     )
     gs = gen.generate(idx=1, compute_length=True)
 

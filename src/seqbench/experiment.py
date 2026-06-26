@@ -116,7 +116,9 @@ def _load_config(config):
             raw = yaml.safe_load(f)
         if raw is None:
             raise ValueError(f"config file {config_path} is empty")
-        return cfg_mod.load(raw), config_path, raw
+        run_cfg = cfg_mod.load(raw)
+        return run_cfg, config_path, to_plain_data(run_cfg)
     if isinstance(config, dict):
-        return cfg_mod.load(config), None, config
+        run_cfg = cfg_mod.load(config)
+        return run_cfg, None, to_plain_data(run_cfg)
     return config, None, to_plain_data(config)

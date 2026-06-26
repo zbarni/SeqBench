@@ -1,42 +1,48 @@
-dataset:
+run:
   seed: 42
+
+symbol_space:
   alphabet:
     size: 10
-    eos: "#"
-  trial_length:
-    min: 1
-    max: 20
-  splits:
-    train: 100
-    test: 100
+  eos: "#"
 
 symseq:
   generator:
-    type: "ArtificialGrammar"
-    mode: "random"
+    type: ArtificialGrammar
+    mode: random
     params:
-      label: "Constrained Random Grammar"
+      label: Constrained Random Grammar
       ambiguities: 0
       ambiguity_depth: 0
       n_start_states: 1
       transition_density: 0.25
       assume_equiprobable: true
+  trial_constraints:
+    length:
+      min: 1
+      max: 20
   tasks:
-    - {name: "next_token", type: "NStepPrediction", params: {n: 1}}
+    - name: next_token
+      type: NStepPrediction
+      params:
+        n: 1
 
 seqbench:
-  mode: "file"
-  prob_generator_type: "restricted"
+  mode: file
+  prob_generator_type: restricted
+  splits:
+    train: 100
+    test: 100
   time_grid:
-    dt: 0.001  # seconds per final output row
+    dt: 0.001
   storage:
-    path: "data/SeqBench"
+    path: data/SeqBench
     force_rebuild: true
   composition:
     combine_sequences: true
     sample_length: 20
   input_mapping:
-    base: "one_hot"
+    base: one_hot
     base_params: {}
     transforms:
       - name: ExpandDim
@@ -44,20 +50,19 @@ seqbench:
         target_size: 700
       - name: TemporalUnfold
         kernel_spec:
-          shape: "alpha"
+          shape: alpha
           params:
-            tau: 0.010    # seconds
-            width: 0.100  # seconds
-        out_dt: 0.001     # seconds per unfolded row
-        duration: 0.100   # seconds total
+            tau: 0.01
+            width: 0.1
+        out_dt: 0.001
+        duration: 0.1
         amplitude: 100.0
       - name: RateCoding
         max_rate: 200.0
         normalize: true
       - name: PoissonEncoding
         temporal: true
-        # normalize defaults to false: consume RateCoding output as Hz.
-        spike_dt: 0.001   # seconds per spike-bin row
+        spike_dt: 0.001
   task:
-    source: "symseq"
-    name: "next_token"
+    source: symseq
+    name: next_token

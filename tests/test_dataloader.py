@@ -40,8 +40,8 @@ def dataset_setup():
 
     run_cfg = cfg_mod.load(config_path)
 
-    seed = run_cfg.dataset.seed
-    dataset_size = min(int(run_cfg.dataset.splits["train"]), 20)
+    seed = run_cfg.run.seed
+    dataset_size = min(int(run_cfg.seqbench.splits["train"]), 20)
 
     random.seed(seed)
     np.random.seed(seed)

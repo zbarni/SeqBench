@@ -40,7 +40,7 @@ def build_symseq_source(config: Any) -> Any:
             "Install it, or supply a different TrialSource."
         ) from exc
 
-    generator_cfg, dataset_cfg, seed = _normalise_config(config)
+    generator_cfg, symbol_space_cfg, seed = _normalise_config(config)
 
     # Normalise: accept a GeneratorCfg dataclass or a plain dict.
     if isinstance(generator_cfg, dict):
@@ -73,38 +73,47 @@ def build_symseq_source(config: Any) -> Any:
                     "ArtificialGrammar with mode='preset' requires a 'preset' key "
                     "inside generator.params (e.g. params: {preset: Elman})."
                 )
-            return ArtificialGrammar.from_preset(
+            source = ArtificialGrammar.from_preset(
                 preset_name=preset_name,
                 seed=params.get("seed", seed if seed is not None else 42),
             )
+            _validate_symbol_space(source, symbol_space_cfg)
+            return source
         if ag_preset:
             # Legacy dict path: top-level "preset" key.
-            return ArtificialGrammar.from_preset(
+            source = ArtificialGrammar.from_preset(
                 preset_name=ag_preset,
                 seed=params.get("seed", seed if seed is not None else 42),
             )
+            _validate_symbol_space(source, symbol_space_cfg)
+            return source
         if ag_mode in (None, "random"):
-            _inherit_ag_random_defaults(params, dataset_cfg, seed)
-            return ArtificialGrammar.from_constraints(**params)
+            _inherit_symbol_space_defaults(params, gen_type, ag_mode, symbol_space_cfg)
+            _inherit_seed(params, seed)
+            source = ArtificialGrammar.from_constraints(**params)
+            _validate_symbol_space(source, symbol_space_cfg)
+            return source
 
-    if seed is not None and "seed" not in params and "rng" not in params:
-        params["seed"] = seed
+    _inherit_symbol_space_defaults(params, gen_type, ag_mode, symbol_space_cfg)
+    _inherit_seed(params, seed)
 
-    return build(gen_type, **params)
+    source = build(gen_type, **params)
+    _validate_symbol_space(source, symbol_space_cfg)
+    return source
 
 
 def _normalise_config(config: Any) -> tuple[Any, Any | None, int | None]:
-    """Return ``(generator_cfg, dataset_cfg, effective_seed)``.
+    """Return ``(generator_cfg, symbol_space_cfg, effective_seed)``.
 
     ``RunConfig`` is preferred because it gives this boundary enough context to
-    apply documented dataset -> symseq inheritance. Bare generator configs still
+    apply documented symbol_space -> symseq inheritance. Bare generator configs still
     work for older call sites and tests.
     """
-    if hasattr(config, "symseq") and hasattr(config, "dataset"):
+    if hasattr(config, "symseq") and hasattr(config, "run"):
         if config.symseq is None:
             raise ValueError("RunConfig must contain a 'symseq' section")
-        seed = config.symseq.seed if config.symseq.seed is not None else config.dataset.seed
-        return config.symseq.generator, config.dataset, seed
+        seed = config.symseq.seed if config.symseq.seed is not None else config.run.seed
+        return config.symseq.generator, config.symbol_space, seed
     return config, None, None
 
 
@@ -112,15 +121,44 @@ def _enum_value(value: Any) -> Any:
     return value.value if hasattr(value, "value") else value
 
 
-def _inherit_ag_random_defaults(
+def _inherit_symbol_space_defaults(
     params: dict[str, Any],
-    dataset_cfg: Any | None,
-    seed: int | None,
+    gen_type: str,
+    ag_mode: Any,
+    symbol_space_cfg: Any | None,
 ) -> None:
-    if dataset_cfg is not None:
-        params.setdefault("alphabet_size", dataset_cfg.alphabet.size)
-        if dataset_cfg.alphabet.eos is not None:
-            params.setdefault("eos", dataset_cfg.alphabet.eos)
+    if symbol_space_cfg is None:
+        return
+    if gen_type == "ArtificialGrammar" and ag_mode in (None, "random"):
+        params.setdefault("alphabet_size", symbol_space_cfg.alphabet.size)
+        if symbol_space_cfg.eos is not None:
+            params.setdefault("eos", symbol_space_cfg.eos)
+    elif gen_type == "NBack":
+        if getattr(symbol_space_cfg.alphabet, "symbols", None) is not None:
+            params.setdefault("alphabet", symbol_space_cfg.alphabet.resolved_symbols)
+        else:
+            params.setdefault("alphabet_size", symbol_space_cfg.alphabet.size)
+
+
+def _inherit_seed(params: dict[str, Any], seed: int | None) -> None:
     if seed is not None:
         params.setdefault("seed", seed)
 
+
+def _validate_symbol_space(source: Any, symbol_space_cfg: Any | None) -> None:
+    if symbol_space_cfg is None:
+        return
+    actual = list(source.alphabet)
+    if getattr(symbol_space_cfg.alphabet, "symbols", None) is None:
+        if len(actual) != symbol_space_cfg.alphabet.size:
+            raise ValueError(
+                "symseq generator alphabet size does not match symbol_space.alphabet.size: "
+                f"expected {symbol_space_cfg.alphabet.size!r}, got {len(actual)!r}"
+            )
+        return
+    expected = symbol_space_cfg.alphabet.resolved_symbols
+    if actual != expected:
+        raise ValueError(
+            "symseq generator alphabet does not match symbol_space.alphabet: "
+            f"expected {expected!r}, got {actual!r}"
+        )

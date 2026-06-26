@@ -125,7 +125,7 @@ class SeqDataset(Dataset):
             is_train: Legacy split boolean. If provided without ``split``,
                 ``True`` maps to ``"train"`` and ``False`` maps to ``"test"``.
             dataset_size: Optional split-size override. Defaults to
-                ``config.dataset.split_size(split)``.
+                ``config.seqbench.split_size(split)``.
             config_file_path: Optional original YAML path copied into generated
                 dataset metadata.
             config_snapshot: Optional parsed config snapshot for metadata.
@@ -148,6 +148,11 @@ class SeqDataset(Dataset):
         base_dataset_provided = base_dataset is not None
 
         if generator is None:
+            if config.symseq is None:
+                raise ValueError(
+                    "SeqDataset requires a trial source. Provide `generator=` or "
+                    "configure a top-level `symseq` section."
+                )
             from seqbench.sources import build_symseq_source
 
             generator = build_symseq_source(config)
@@ -289,9 +294,9 @@ class SeqDataset(Dataset):
         self._run_cfg = run_cfg
         self.split = split
         seqbench_seed = run_cfg.seqbench.seed if run_cfg.seqbench is not None else None
-        self._seed = seqbench_seed if seqbench_seed is not None else run_cfg.dataset.seed
+        self._seed = seqbench_seed if seqbench_seed is not None else run_cfg.run.seed
         self.dataset_size = (
-            dataset_size if dataset_size is not None else run_cfg.dataset.split_size(split)
+            dataset_size if dataset_size is not None else run_cfg.seqbench.split_size(split)
         )
         self._final_dt = run_cfg.seqbench.time_grid.dt
         self._time_validation = run_cfg.seqbench.time_grid.validation
@@ -315,11 +320,11 @@ class SeqDataset(Dataset):
         self._global_noise = 0
 
         # Sequence generator params
-        self._seq_len_min = run_cfg.dataset.trial_length.min
-        self._seq_len_max = run_cfg.dataset.trial_length.max
         self._combine_sequences = run_cfg.seqbench.composition.combine_sequences
         self._combined_seq_len = run_cfg.seqbench.composition.sample_length
-        self._trial_params = run_cfg.symseq.generator.trial_params if run_cfg.symseq else {}
+        from seqbench.config import resolve_trial_params
+
+        self._trial_params = resolve_trial_params(run_cfg.symseq)
 
         # Normalise gap profile
         gp_cfg = run_cfg.seqbench.composition.gap_profile
@@ -515,8 +520,6 @@ class SeqDataset(Dataset):
         """
         return SequenceGenerator(
             self.generator,
-            seq_len_min=self._seq_len_min,
-            seq_len_max=self._seq_len_max,
             combine_sequences=self._combine_sequences,
             combined_seq_len=self._combined_seq_len,
             seed=self._seed,

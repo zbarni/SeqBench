@@ -45,16 +45,16 @@ _GRAMMAR = {
 def _raw(task, *, symseq_tasks=None, generator=None, combine=False, mode="online",
          storage_path="/tmp/sb_pipeline_test"):
     cfg = {
-        "dataset": {
-            "seed": 1,
-            "alphabet": {"size": 4, "eos": "#"},
-            "trial_length": {"min": 1, "max": 20},
-            "splits": {"train": 8, "test": 4},
+        "run": {"seed": 1},
+        "symbol_space": {"alphabet": {"size": 4}, "eos": "#"},
+        "symseq": {
+            "generator": generator or _GRAMMAR,
+            "trial_constraints": {"length": {"min": 1, "max": 20}},
         },
-        "symseq": {"generator": generator or _GRAMMAR},
         "seqbench": {
             "mode": mode,
             "prob_generator_type": "restricted",
+            "splits": {"train": 8, "test": 4},
             "storage": {"path": storage_path},
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": combine, "sample_length": 20},
@@ -242,16 +242,16 @@ def test_label_source_base_reads_from_base_dataset():
     """label_source='base' must use base_dataset[rep_idx][1], not class_seq[0]."""
     alphabet_size = 4
     raw = {
-        "dataset": {
-            "seed": 1,
-            "alphabet": {"size": alphabet_size, "eos": "#"},
-            "trial_length": {"min": 1, "max": 10},
-            "splits": {"train": 8, "test": 4},
+        "run": {"seed": 1},
+        "symbol_space": {"alphabet": {"size": alphabet_size}, "eos": "#"},
+        "symseq": {
+            "generator": _GRAMMAR,
+            "trial_constraints": {"length": {"min": 1, "max": 10}},
         },
-        "symseq": {"generator": _GRAMMAR},
         "seqbench": {
             "mode": "online",
             "prob_generator_type": "restricted",
+            "splits": {"train": 8, "test": 4},
             "storage": {"path": "/tmp/sb_label_base_test"},
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 1},

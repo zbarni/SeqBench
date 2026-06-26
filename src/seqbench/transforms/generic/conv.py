@@ -18,6 +18,20 @@ from seqbench.transforms.base import TransformTimeSpec
 logger = logging.getLogger(__name__)
 
 
+def _validate_kernel_spec(kernel_spec, transform_name: str) -> dict:
+    if not isinstance(kernel_spec, dict):
+        raise TypeError(f"{transform_name} kernel_spec must be a dict with 'shape' and 'params'")
+
+    missing = {"shape", "params"} - set(kernel_spec)
+    if missing:
+        raise ValueError(f"{transform_name} kernel_spec missing required key(s): {sorted(missing)}")
+
+    if not isinstance(kernel_spec["params"], dict):
+        raise TypeError(f"{transform_name} kernel_spec['params'] must be a dict")
+
+    return kernel_spec
+
+
 def make_temporal_kernel(
     shape: str,
     width: float = 3.0,
@@ -77,27 +91,33 @@ def make_temporal_kernel(
         k = torch.ones_like(x) * height
 
     elif shape == "exp":
-        assert "tau" in kwargs, "for exponential kernel, please specify tau"
+        if "tau" not in kwargs:
+            raise ValueError("for exponential kernel, please specify tau")
         tau = kwargs["tau"]
         k = torch.exp(-x / tau) * height
 
     elif shape == "double_exp":
-        assert "tau_1" in kwargs, "for double exponential kernel, please specify tau_1"
-        assert "tau_2" in kwargs, "for double exponential kernel, please specify tau_2"
+        if "tau_1" not in kwargs:
+            raise ValueError("for double exponential kernel, please specify tau_1")
+        if "tau_2" not in kwargs:
+            raise ValueError("for double exponential kernel, please specify tau_2")
         tau_1 = kwargs["tau_1"]
         tau_2 = kwargs["tau_2"]
         tmp_k = -torch.exp(-x / tau_1) + torch.exp(-x / tau_2)
         k = tmp_k * (height / torch.max(tmp_k))
 
     elif shape == "alpha":
-        assert "tau" in kwargs, "for alpha kernel, please specify tau"
+        if "tau" not in kwargs:
+            raise ValueError("for alpha kernel, please specify tau")
         tau = kwargs["tau"]
         tmp_k = (x / tau) * torch.exp(-x / tau)
         k = tmp_k * (height / torch.max(tmp_k))
 
     elif shape == "gauss":
-        assert "mu" in kwargs, "for Gaussian kernel, please specify mu"
-        assert "sigma" in kwargs, "for Gaussian kernel, please specify sigma"
+        if "mu" not in kwargs:
+            raise ValueError("for Gaussian kernel, please specify mu")
+        if "sigma" not in kwargs:
+            raise ValueError("for Gaussian kernel, please specify sigma")
         sigma = kwargs["sigma"]
         mu = kwargs["mu"]
         tmp_k = (1.0 / (sigma * torch.sqrt(2.0 * torch.tensor(torch.pi, device=device)))) * torch.exp(
@@ -113,9 +133,12 @@ def make_temporal_kernel(
         k = k * height / torch.max(k)  # Normalize to height
 
     elif shape == "sin":
-        assert "frequency" in kwargs, "for sin kernel, please specify frequency"
-        assert "phase_shift" in kwargs, "for sin kernel, please specify phase_shift"
-        assert "mean_amplitude" in kwargs, "for sin kernel, please specify mean_amplitude"
+        if "frequency" not in kwargs:
+            raise ValueError("for sin kernel, please specify frequency")
+        if "phase_shift" not in kwargs:
+            raise ValueError("for sin kernel, please specify phase_shift")
+        if "mean_amplitude" not in kwargs:
+            raise ValueError("for sin kernel, please specify mean_amplitude")
         frequency = kwargs["frequency"]
         phase_shift = kwargs["phase_shift"]
         mean_amplitude = kwargs["mean_amplitude"]
@@ -191,18 +214,13 @@ class TemporalUnfold:
             Each active element in ``x`` becomes a temporal kernel response.
         """
 
-        if not isinstance(kernel_spec, dict):  # config dict
-            if "shape" not in kernel_spec.keys() or "params" not in kernel_spec.keys():
-                raise ValueError("Incorrect / Incomplete kernel parameters are missing!")
+        kernel_spec = _validate_kernel_spec(kernel_spec, "TemporalUnfold")
 
         # case where amplitudes and/or durations are drawn from distribution
         if isinstance(amplitude, dict):
             amplitude = amplitude["dist"](**amplitude["params"])
         elif isinstance(amplitude, list):
-            raise ValueError("List of amplitudes not implemented")
-            assert len(amplitude) == len(self.vocabulary), "Nr of token amplitudes does not match vocabulary length!"
-            token_idx = self.vocabulary.index(token)
-            amplitude = amplitude[token_idx]
+            raise ValueError("List amplitudes are not supported; use a scalar, tensor, or distribution dict")
         else:
             amplitude = amplitude
 
@@ -336,9 +354,7 @@ class TemporalFilter:
         The input time grid is supplied by ``Compose.resolve_time_grid``. The
         filter preserves the input grid resolution.
         """
-        if not isinstance(kernel_spec, dict):  # config dict
-            if "shape" not in kernel_spec.keys() or "params" not in kernel_spec.keys():
-                raise ValueError("Incorrect / Incomplete kernel parameters are missing!")
+        kernel_spec = _validate_kernel_spec(kernel_spec, "TemporalFilter")
 
         bad = set(torch_kwargs) - {"device", "dtype"}
         if bad:

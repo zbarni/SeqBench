@@ -28,8 +28,6 @@ def _nback_gen(combine, combined_seq_len=20):
     source = NBack(n=2, seq_length=8, alphabet_size=5, seed=1)
     return SequenceGenerator(
         source,
-        seq_len_min=1,
-        seq_len_max=50,
         combine_sequences=combine,
         combined_seq_len=combined_seq_len,
         seed=7,
@@ -93,8 +91,6 @@ def test_per_trial_target_spread_under_combine():
     # masked. No supervision is discarded.
     gen = SequenceGenerator(
         _PerTrialSource(),
-        seq_len_min=1,
-        seq_len_max=50,
         combine_sequences=True,
         combined_seq_len=10,
         seed=1,
@@ -113,8 +109,6 @@ def test_per_trial_target_spread_under_combine():
 def test_per_trial_target_forwarded_without_combine():
     gen = SequenceGenerator(
         _PerTrialSource(),
-        seq_len_min=1,
-        seq_len_max=50,
         combine_sequences=False,
         combined_seq_len=10,
         seed=1,

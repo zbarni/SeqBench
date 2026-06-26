@@ -80,15 +80,21 @@ class TestMakeTemporalKernel:
         assert kernel.dtype == dtype
 
     def test_missing_parameters(self):
-        """Test that missing required parameters raise assertions."""
-        with pytest.raises(AssertionError):
+        """Test that missing required parameters raise explicit errors."""
+        with pytest.raises(ValueError):
             make_temporal_kernel(shape="exp", width=5.0)
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
+            make_temporal_kernel(shape="double_exp", width=5.0, tau_1=1.0)
+
+        with pytest.raises(ValueError):
             make_temporal_kernel(shape="alpha", width=5.0)
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             make_temporal_kernel(shape="gauss", width=5.0, mu=0.0)
+
+        with pytest.raises(ValueError):
+            make_temporal_kernel(shape="sin", width=5.0, frequency=1.0, phase_shift=0.0)
 
 
 class TestTemporalUnfold:
@@ -107,6 +113,27 @@ class TestTemporalUnfold:
         kernel_spec = {"shape": "box", "params": {}}
         with pytest.raises(ValueError, match="duration must align with out_dt"):
             TemporalUnfold(kernel_spec=kernel_spec, out_dt=0.1, duration=1.05)
+
+    def test_kernel_spec_must_be_dict(self):
+        """Test that invalid kernel specs raise explicit type errors."""
+        with pytest.raises(TypeError, match="kernel_spec must be a dict"):
+            TemporalUnfold(kernel_spec="box", out_dt=0.1, duration=1.0)
+
+    def test_kernel_spec_requires_shape_and_params(self):
+        """Test that incomplete kernel specs raise explicit value errors."""
+        with pytest.raises(ValueError, match="missing required key"):
+            TemporalUnfold(kernel_spec={"shape": "box"}, out_dt=0.1, duration=1.0)
+
+    def test_kernel_spec_params_must_be_dict(self):
+        """Test that kernel params must be a dict."""
+        with pytest.raises(TypeError, match=r"params.*must be a dict"):
+            TemporalUnfold(kernel_spec={"shape": "box", "params": []}, out_dt=0.1, duration=1.0)
+
+    def test_list_amplitudes_are_rejected(self):
+        """Test that unsupported list amplitudes fail explicitly."""
+        kernel_spec = {"shape": "box", "params": {}}
+        with pytest.raises(ValueError, match="List amplitudes are not supported"):
+            TemporalUnfold(kernel_spec=kernel_spec, out_dt=0.1, duration=1.0, amplitude=[1.0])
 
     def test_initialization_with_num_steps(self):
         """Test initialization with explicit num_steps."""
@@ -514,6 +541,14 @@ class TestTemporalUnfold:
 
 
 class TestTemporalFilter:
+    def test_kernel_spec_must_be_dict(self):
+        with pytest.raises(TypeError, match="kernel_spec must be a dict"):
+            TemporalFilter(kernel_spec="box")
+
+    def test_kernel_spec_requires_shape_and_params(self):
+        with pytest.raises(ValueError, match="missing required key"):
+            TemporalFilter(kernel_spec={"shape": "box"})
+
     def test_requires_resolved_time_grid_before_call(self):
         filt = TemporalFilter(kernel_spec={"shape": "box", "params": {"width": 0.2}})
         with pytest.raises(RuntimeError, match="resolve_time_grid"):

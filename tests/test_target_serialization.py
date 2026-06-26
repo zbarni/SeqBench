@@ -68,6 +68,29 @@ def test_legacy_three_field_line_parses_with_no_targets():
     assert out.targets is None
 
 
+def test_parse_rejects_malformed_field_count():
+    with pytest.raises(ValueError, match="3 or 4"):
+        DatasetGenerator.create_gensample_from_str("[1, 2]::['a', 'b']")
+
+
+def test_parse_rejects_mismatched_class_and_state_lengths():
+    line = "[1, 2, 0]::['a', 'b']::3"
+    with pytest.raises(ValueError, match="same length"):
+        DatasetGenerator.create_gensample_from_str(line)
+
+
+def test_parse_rejects_malformed_targets():
+    line = "[1, 0]::['a', '#']::2::{bad json"
+    with pytest.raises(ValueError, match="targets field"):
+        DatasetGenerator.create_gensample_from_str(line)
+
+
+def test_write_rejects_mismatched_class_and_state_lengths():
+    gs = GeneratorSample(np.array([1, 2, 0]), np.array(["a", "b"], dtype=object), 3)
+    with pytest.raises(ValueError, match="same length"):
+        DatasetGenerator.write_gensample_to_file(io.StringIO(), gs)
+
+
 def test_roundtrip_nback_intrinsic_targets():
     symseq = pytest.importorskip("symseq")
     from symseq.generators.nback import NBack
@@ -75,8 +98,6 @@ def test_roundtrip_nback_intrinsic_targets():
 
     gen = SequenceGenerator(
         NBack(n=2, seq_length=8, alphabet_size=5, seed=1),
-        seq_len_min=1,
-        seq_len_max=50,
         combine_sequences=False,
         combined_seq_len=20,
         seed=3,

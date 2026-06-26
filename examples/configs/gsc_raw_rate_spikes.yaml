@@ -1,58 +1,61 @@
-# Converts raw GSC audio data to Poisson spikes
-# TODO incomplete, raw datasets not yet available
-
-dataset:
+run:
   seed: 42
+
+symbol_space:
   alphabet:
     size: 10
-    eos: "#"
-  trial_length:
-    min: 1
-    max: 20
-  splits:
-    train: 100
-    test: 100
+  eos: "#"
 
 symseq:
   generator:
-    type: "ArtificialGrammar"
-    mode: "random"
+    type: ArtificialGrammar
+    mode: random
     params:
-      label: "Constrained Random Grammar"
+      label: Constrained Random Grammar
       ambiguities: 0
       ambiguity_depth: 0
       n_start_states: 1
       transition_density: 0.25
       assume_equiprobable: true
+  trial_constraints:
+    length:
+      min: 1
+      max: 20
   tasks:
-    - {name: "next_token", type: "NStepPrediction", params: {n: 1}}
+    - name: next_token
+      type: NStepPrediction
+      params:
+        n: 1
 
 seqbench:
-  mode: "file"
-  prob_generator_type: "restricted"
+  mode: file
+  prob_generator_type: restricted
+  splits:
+    train: 100
+    test: 100
   time_grid:
-    dt: 0.001  # seconds per final output row
+    dt: 0.001
   storage:
-    path: "data/SeqBench"
+    path: data/SeqBench
     force_rebuild: false
   composition:
     combine_sequences: true
     sample_length: 20
   input_mapping:
-    base: "gsc"
+    base: gsc
     base_params:
       bin_size: 10
-      base_dataset_path: "datasets/GSC"
-      split: "training"
+      base_dataset_path: datasets/GSC
+      split: training
       return_raw: true
     transforms:
       - name: MFCC
-        sample_rate: 16000  # Hz
+        sample_rate: 16000
         n_mfcc: 13
         n_mels: 40
         n_fft: 512
-        win_length: 400     # audio samples
-        hop_length: 160     # audio samples -> 0.01s at 16 kHz
+        win_length: 400
+        hop_length: 160
       - name: AdaptivePercentileNorm
         floor_percentile: 10.0
         ceil_percentile: 90.0
@@ -66,11 +69,11 @@ seqbench:
         normalize: true
       - name: PoissonEncoding
         temporal: true
-        spike_dt: 0.001     # seconds per spike-bin row
+        spike_dt: 0.001
       - name: BinAlongAxis
         bin_size: 5
         bin_axis: -1
-        reduction: "binary"
+        reduction: binary
   task:
-    source: "symseq"
-    name: "next_token"
+    source: symseq
+    name: next_token

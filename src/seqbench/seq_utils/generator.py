@@ -60,8 +60,6 @@ class SequenceGenerator:
         self,
         source,
         *,
-        seq_len_min: int,
-        seq_len_max: int,
         combine_sequences: bool,
         combined_seq_len: int,
         seed=None,
@@ -71,14 +69,9 @@ class SequenceGenerator:
         task_builder=None,
     ):
         self.task_builder = task_builder
-        self.seq_len_min = seq_len_min
-        self.seq_len = seq_len_max
         self.seed = seed
         self.compute_te = compute_te
         self.plot_transition_table = plot_transition_table
-        self.n_max_tries = (
-            1e4  # number of maximum attempts to generate a string of correct length
-        )
         self.num_illustration_seq = 4
 
         self.combine_sequences = combine_sequences
@@ -252,22 +245,9 @@ class SequenceGenerator:
         return acc
 
     def generate_sequence(self):
-
-        seq_len_min = self.seq_len_min
-        seq_len_max = self.seq_len
-
-        symbols: list[str] = []
-        states: list[str] = []
-        trial = None
-        cnt = 0
-        while not (seq_len_min <= len(symbols) <= seq_len_max):
-            trial = self.source.draw_trial(**self._trial_params)
-            symbols = list(trial.symbols)
-            states = list(trial.states) if trial.states is not None else list(symbols)
-
-            if cnt > self.n_max_tries:
-                raise RuntimeError("Could not generate a string of wanted length!")
-            cnt += 1
+        trial = self.source.draw_trial(**self._trial_params)
+        symbols = list(trial.symbols)
+        states = list(trial.states) if trial.states is not None else list(symbols)
 
         # Append EOS marker to both views; encoder maps '#' -> 0.
         state_seq = states + [SymbolEncoder.EOS_SYMBOL]

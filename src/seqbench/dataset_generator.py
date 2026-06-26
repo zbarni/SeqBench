@@ -207,7 +207,8 @@ class RestrictedTargetProbGenerator:
         self.transition_probs = transition_probs
 
     def __call__(self, state_seq):
-        assert self.transition_probs is not None
+        if self.transition_probs is None:
+            raise RuntimeError("Transition probabilities have not been initialized")
 
         target_probs = []
         for state in state_seq:
@@ -319,26 +320,39 @@ class DatasetGenerator:
             GeneratorSample: Parsed sample object
 
         Raises:
-            AssertionError: If class_seq and state_seq have different lengths
+            ValueError: If the line is malformed or sequences have different lengths
         """
-        line = line.split("::", 3)
+        raw_line = line.rstrip("\n")
+        fields = raw_line.split("::", 3)
+        if len(fields) not in {3, 4}:
+            raise ValueError(
+                "GeneratorSample line must have 3 or 4 '::'-separated fields, "
+                f"got {len(fields)}: {raw_line!r}"
+            )
 
-        class_seq = line[0].replace("[", "").replace("]", "")
-        class_seq = class_seq.split(",")
-        class_seq = [int(d.strip()) for d in class_seq]
+        try:
+            class_seq = fields[0].replace("[", "").replace("]", "")
+            class_seq = class_seq.split(",")
+            class_seq = [int(d.strip()) for d in class_seq]
 
-        state_seq = line[1].replace("[", "").replace("]", "")
-        state_seq = state_seq.replace("'", "")
-        state_seq = state_seq.split(",")
-        state_seq = [d.strip() for d in state_seq]
+            state_seq = fields[1].replace("[", "").replace("]", "")
+            state_seq = state_seq.replace("'", "")
+            state_seq = state_seq.split(",")
+            state_seq = [d.strip() for d in state_seq]
 
-        assert len(class_seq) == len(state_seq), "Class and state sequences must have same length"
+            length = int(fields[2])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Malformed GeneratorSample line: {raw_line!r}") from exc
 
-        length = int(line[2])
+        if len(class_seq) != len(state_seq):
+            raise ValueError("Class and state sequences must have same length")
 
         # 4th field (targets) is optional: legacy 3-field datasets parse with
         # targets=None and rely on the task builder to recompute derivable ones.
-        targets = _targets_from_json(line[3]) if len(line) >= 4 else None
+        try:
+            targets = _targets_from_json(fields[3]) if len(fields) >= 4 else None
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError(f"Malformed GeneratorSample targets field: {raw_line!r}") from exc
 
         return GeneratorSample(class_seq, state_seq, length, targets=targets)
 
@@ -380,12 +394,13 @@ class DatasetGenerator:
             gensample: GeneratorSample to write
 
         Raises:
-            AssertionError: If class_seq and state_seq have different lengths
+            ValueError: If class_seq and state_seq have different lengths
         """
         class_seq = gensample.class_seq.tolist()
         state_seq = gensample.state_seq.tolist()
 
-        assert len(class_seq) == len(state_seq), "Class and state sequences must have same length"
+        if len(class_seq) != len(state_seq):
+            raise ValueError("Class and state sequences must have same length")
 
         targets_field = _targets_to_json(getattr(gensample, "targets", None))
         file.write(f"{class_seq}::{state_seq}::{gensample.length}::{targets_field}\n")

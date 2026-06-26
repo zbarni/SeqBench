@@ -191,18 +191,16 @@ def test_from_run_cfg_symseq_source():
     from seqbench import config as cfg_mod
 
     raw = {
-        "dataset": {
-            "seed": 1,
-            "alphabet": {"size": 3, "eos": "#"},
-            "trial_length": {"min": 1, "max": 20},
-            "splits": {"train": 10, "test": 5},
-        },
+        "run": {"seed": 1},
+        "symbol_space": {"alphabet": {"size": 3}, "eos": "#"},
         "symseq": {
             "generator": {"type": "NBack", "params": {"n": 2, "alphabet_size": 3, "seq_length": 8}},
+            "trial_constraints": {"length": {"min": 1, "max": 20}},
             "tasks": [{"name": "next_token", "type": "NStepPrediction", "params": {"n": 1}}],
         },
         "seqbench": {
             "mode": "online",
+            "splits": {"train": 10, "test": 5},
             "storage": {"path": "/tmp/sb"},
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},
@@ -221,14 +219,11 @@ def test_from_run_cfg_seqbench_state_classification_requires_state_id_fn():
     from seqbench import config as cfg_mod
 
     raw = {
-        "dataset": {
-            "seed": 1,
-            "alphabet": {"size": 3, "eos": "#"},
-            "trial_length": {"min": 1, "max": 20},
-            "splits": {"train": 10, "test": 5},
-        },
+        "run": {"seed": 1},
+        "symbol_space": {"alphabet": {"size": 3}, "eos": "#"},
         "seqbench": {
             "mode": "online",
+            "splits": {"train": 10, "test": 5},
             "storage": {"path": "/tmp/sb"},
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},

@@ -30,7 +30,7 @@ def validate(config: Path) -> None:
     task = run_cfg.seqbench.task
     typer.echo(f"Valid config: {config}")
     typer.echo(f"Mode: {_enum_value(run_cfg.operating_mode)}")
-    typer.echo(f"Splits: {', '.join(run_cfg.dataset.splits)}")
+    typer.echo(f"Splits: {', '.join(run_cfg.seqbench.splits)}")
     typer.echo(f"Storage path: {run_cfg.seqbench.storage.path}")
     typer.echo(f"Input mapping: {run_cfg.seqbench.input_mapping.base}")
     typer.echo(f"Task source: {_enum_value(task.source)}")
@@ -178,10 +178,10 @@ def _require_seqbench(run_cfg) -> None:
 
 
 def _selected_splits(run_cfg, split: str | None) -> list[str]:
-    available = list(run_cfg.dataset.splits)
+    available = list(run_cfg.seqbench.splits)
     if split is None:
         return available
-    if split not in run_cfg.dataset.splits:
+    if split not in run_cfg.seqbench.splits:
         raise typer.BadParameter(
             f"unknown split {split!r}; available: {available}",
             param_hint="--split",

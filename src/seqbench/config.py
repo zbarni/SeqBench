@@ -10,7 +10,7 @@ schema is documented in detail in
 ``SeqBench/examples/configs/_schema_reference.yaml``.
 
 This module is intentionally side-effect-free: it does NOT perform
-``dataset → symseq`` inheritance, does NOT instantiate generators, and does
+``symbol_space → symseq`` inheritance, does NOT instantiate generators, and does
 NOT touch disk. Those steps belong to the loader that consumes a parsed
 :class:`RunConfig` (next step).
 """
@@ -43,80 +43,89 @@ class TaskSource(str, Enum):
     SEQBENCH = "seqbench"
 
 
-# ----------------------------- dataset ----------------------------------------
+# ----------------------------- run / symbol space -----------------------------
 
 
 @dataclass
-class AlphabetCfg:
+class RunMetaCfg:
+    seed: int
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.seed, int):
+            raise ValueError(f"run.seed must be int, got {self.seed!r}")
+        if self.name is not None and not isinstance(self.name, str):
+            raise ValueError(f"run.name must be a string or null, got {self.name!r}")
+
+
+@dataclass
+class SymbolAlphabetCfg:
     size: int
+    symbols: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.symbols is not None:
+            if not isinstance(self.symbols, list) or not all(
+                isinstance(s, str) for s in self.symbols
+            ):
+                raise ValueError("symbol_space.alphabet.symbols must be a list of strings")
+            if len(set(self.symbols)) != len(self.symbols):
+                raise ValueError("symbol_space.alphabet.symbols must be unique")
+            if self.size != len(self.symbols):
+                raise ValueError(
+                    "symbol_space.alphabet.size must match len(symbols), "
+                    f"got size={self.size!r}, len(symbols)={len(self.symbols)}"
+                )
+        if not isinstance(self.size, int) or self.size < 1:
+            raise ValueError(
+                f"symbol_space.alphabet.size must be a positive int, got {self.size!r}"
+            )
+
+    @property
+    def resolved_symbols(self) -> list[str]:
+        if self.symbols is not None:
+            return list(self.symbols)
+        return [str(i) for i in range(self.size)]
+
+
+@dataclass
+class SymbolSpaceCfg:
+    alphabet: SymbolAlphabetCfg
     eos: str | None = "#"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.size, int) or self.size < 1:
-            raise ValueError(f"alphabet.size must be a positive int, got {self.size!r}")
         if self.eos is not None and not isinstance(self.eos, str):
-            raise ValueError(f"alphabet.eos must be a string or null, got {self.eos!r}")
+            raise ValueError(f"symbol_space.eos must be a string or null, got {self.eos!r}")
+        if self.eos is not None and self.eos in self.alphabet.resolved_symbols:
+            raise ValueError(
+                f"symbol_space.eos {self.eos!r} must not appear in alphabet symbols"
+            )
+
+    @property
+    def symbols(self) -> list[str]:
+        return self.alphabet.resolved_symbols
 
 
 @dataclass
-class TrialLengthCfg:
+class LengthConstraintCfg:
     min: int
     max: int
-    distribution: str = "uniform"
 
     def __post_init__(self) -> None:
         if not (isinstance(self.min, int) and self.min >= 0):
-            raise ValueError(f"trial_length.min must be a non-negative int, got {self.min!r}")
+            raise ValueError(
+                f"trial_constraints.length.min must be a non-negative int, got {self.min!r}"
+            )
         if not (isinstance(self.max, int) and self.max >= self.min):
             raise ValueError(
-                f"trial_length.max must be an int >= min ({self.min}), got {self.max!r}"
+                "trial_constraints.length.max must be an int >= "
+                f"min ({self.min}), got {self.max!r}"
             )
 
 
 @dataclass
-class DatasetCfg:
-    seed: int
-    alphabet: AlphabetCfg
-    trial_length: TrialLengthCfg
-    splits: dict[str, int | float]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.seed, int):
-            raise ValueError(f"dataset.seed must be int, got {self.seed!r}")
-        if not self.splits:
-            raise ValueError("dataset.splits must be non-empty")
-        for name, value in self.splits.items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(
-                    f"dataset.splits[{name!r}] must be int (count) or float in (0,1] "
-                    f"(fraction), got {value!r}"
-                )
-            if isinstance(value, float) and not (0.0 < value <= 1.0):
-                raise ValueError(
-                    f"dataset.splits[{name!r}] float must be in (0,1], got {value!r}"
-                )
-            if isinstance(value, int) and value < 0:
-                raise ValueError(
-                    f"dataset.splits[{name!r}] int must be >= 0, got {value!r}"
-                )
-
-    def split_size(self, name: str, total: int | None = None) -> int:
-        """Return the absolute sample count for a named split.
-
-        If the stored value is already an int it is returned directly.
-        If it is a float fraction, *total* must be provided; the result is
-        ``round(fraction * total)``.  Passing no *total* for a fractional split
-        raises ``TypeError`` rather than silently truncating to 0.
-        """
-        value = self.splits[name]
-        if isinstance(value, float):
-            if total is None:
-                raise TypeError(
-                    f"dataset.splits[{name!r}] is a fraction ({value!r}) — "
-                    "provide a total sample count to resolve it"
-                )
-            return round(value * total)
-        return value
+class TrialConstraintsCfg:
+    length: LengthConstraintCfg | None = None
 
 
 # ----------------------------- symseq -----------------------------------------
@@ -166,9 +175,25 @@ class SymseqStorageCfg:
 
 
 @dataclass
+class SymseqTrialSetCfg:
+    n_trials: int
+    splits: dict[str, int | float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.n_trials, int) or self.n_trials < 1:
+            raise ValueError(
+                f"symseq.trial_set.n_trials must be a positive int, got {self.n_trials!r}"
+            )
+        if self.splits:
+            _validate_splits(self.splits, where="symseq.trial_set.splits")
+
+
+@dataclass
 class SymseqCfg:
     generator: GeneratorCfg
     seed: int | None = None
+    trial_constraints: TrialConstraintsCfg | None = None
+    trial_set: SymseqTrialSetCfg | None = None
     tasks: list[SymseqTaskEntry] = field(default_factory=list)
     storage: SymseqStorageCfg | None = None
 
@@ -279,6 +304,7 @@ class SeqbenchTaskCfg:
 @dataclass
 class SeqbenchCfg:
     mode: str
+    splits: dict[str, int | float]
     storage: SeqbenchStorageCfg
     time_grid: TimeGridCfg
     composition: CompositionCfg
@@ -292,6 +318,19 @@ class SeqbenchCfg:
             raise ValueError(
                 f"seqbench.mode must be 'file' | 'offline' | 'online', got {self.mode!r}"
             )
+        _validate_splits(self.splits, where="seqbench.splits")
+
+    def split_size(self, name: str, total: int | None = None) -> int:
+        """Return the absolute sample count for a named SeqBench split."""
+        value = self.splits[name]
+        if isinstance(value, float):
+            if total is None:
+                raise TypeError(
+                    f"seqbench.splits[{name!r}] is a fraction ({value!r}); "
+                    "provide a total sample count to resolve it"
+                )
+            return round(value * total)
+        return value
 
 
 # ----------------------------- root -------------------------------------------
@@ -299,7 +338,8 @@ class SeqbenchCfg:
 
 @dataclass
 class RunConfig:
-    dataset: DatasetCfg
+    run: RunMetaCfg
+    symbol_space: SymbolSpaceCfg | None = None
     symseq: SymseqCfg | None = None
     seqbench: SeqbenchCfg | None = None
 
@@ -336,6 +376,7 @@ class RunConfig:
 def load(source: str | Path | dict) -> RunConfig:
     """Load a YAML file (or pre-parsed dict) into a validated :class:`RunConfig`."""
     raw = _load_raw(source)
+    raw = _migrate_raw(raw)
     return _parse_root(raw)
 
 
@@ -358,31 +399,57 @@ def _load_raw(source: str | Path | dict) -> dict:
 
 
 def _parse_root(raw: dict) -> RunConfig:
-    _require_keys(raw, {"dataset"}, where="<root>")
-    ds = _parse_dataset(raw["dataset"])
+    _require_keys(raw, {"run"}, where="<root>")
+    _require_keys(raw["run"], {"seed"}, where="run")
+    run = RunMetaCfg(**raw["run"])
+    symbol_space = (
+        _parse_symbol_space(raw["symbol_space"]) if raw.get("symbol_space") else None
+    )
     symseq = _parse_symseq(raw["symseq"]) if "symseq" in raw else None
     seqbench = _parse_seqbench(raw["seqbench"]) if "seqbench" in raw else None
-    return RunConfig(dataset=ds, symseq=symseq, seqbench=seqbench)
+    return RunConfig(
+        run=run,
+        symbol_space=symbol_space,
+        symseq=symseq,
+        seqbench=seqbench,
+    )
 
 
-def _parse_dataset(raw: dict) -> DatasetCfg:
-    _require_keys(raw, {"seed", "alphabet", "trial_length", "splits"}, where="dataset")
-    return DatasetCfg(
-        seed=raw["seed"],
-        alphabet=AlphabetCfg(**raw["alphabet"]),
-        trial_length=TrialLengthCfg(**raw["trial_length"]),
-        splits=dict(raw["splits"]),
+def _parse_symbol_space(raw: dict) -> SymbolSpaceCfg:
+    _require_keys(raw, {"alphabet"}, where="symbol_space")
+    return SymbolSpaceCfg(
+        alphabet=SymbolAlphabetCfg(**raw["alphabet"]),
+        eos=raw.get("eos", "#"),
     )
 
 
 def _parse_symseq(raw: dict) -> SymseqCfg:
     _require_keys(raw, {"generator"}, where="symseq")
     gen = GeneratorCfg(**raw["generator"])
+    trial_constraints = None
+    if raw.get("trial_constraints"):
+        tc_raw = dict(raw["trial_constraints"])
+        length = (
+            LengthConstraintCfg(**tc_raw["length"])
+            if tc_raw.get("length")
+            else None
+        )
+        trial_constraints = TrialConstraintsCfg(length=length)
     tasks = [SymseqTaskEntry(**t) for t in (raw.get("tasks") or [])]
     storage = SymseqStorageCfg(**raw["storage"]) if raw.get("storage") else None
+    trial_set = (
+        SymseqTrialSetCfg(
+            n_trials=raw["trial_set"]["n_trials"],
+            splits=dict(raw["trial_set"].get("splits") or {}),
+        )
+        if raw.get("trial_set")
+        else None
+    )
     return SymseqCfg(
         generator=gen,
         seed=raw.get("seed"),
+        trial_constraints=trial_constraints,
+        trial_set=trial_set,
         tasks=tasks,
         storage=storage,
     )
@@ -393,7 +460,7 @@ def _parse_seqbench(raw: dict) -> SeqbenchCfg:
         raise ValueError("seqbench.dt is no longer supported; use seqbench.time_grid.dt")
     _require_keys(
         raw,
-        {"mode", "storage", "time_grid", "composition", "input_mapping", "task"},
+        {"mode", "splits", "storage", "time_grid", "composition", "input_mapping", "task"},
         where="seqbench",
     )
     storage = SeqbenchStorageCfg(**raw["storage"])
@@ -413,6 +480,7 @@ def _parse_seqbench(raw: dict) -> SeqbenchCfg:
     task = SeqbenchTaskCfg(**raw["task"])
     return SeqbenchCfg(
         mode=raw["mode"],
+        splits=dict(raw["splits"]),
         storage=storage,
         time_grid=time_grid,
         composition=composition,
@@ -427,3 +495,74 @@ def _require_keys(d: dict, keys: set[str], *, where: str) -> None:
     missing = keys - set(d)
     if missing:
         raise ValueError(f"{where}: missing required keys {sorted(missing)}")
+
+
+def resolve_trial_params(symseq: SymseqCfg | None) -> dict[str, Any]:
+    """Delegate SymSeq per-trial generation policy to ``symseq.config``."""
+    if symseq is None:
+        return {}
+    try:
+        from symseq.config import resolve_trial_params as _resolve
+    except ImportError as exc:
+        raise ImportError(
+            "Resolving symseq trial parameters requires the `symseq` package."
+        ) from exc
+    return _resolve(symseq)
+
+
+def _validate_splits(splits: dict[str, int | float], *, where: str) -> None:
+    if not splits:
+        raise ValueError(f"{where} must be non-empty")
+    for name, value in splits.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"{where}[{name!r}] must be int (count) or float in (0,1], "
+                f"got {value!r}"
+            )
+        if isinstance(value, float) and not (0.0 < value <= 1.0):
+            raise ValueError(f"{where}[{name!r}] float must be in (0,1], got {value!r}")
+        if isinstance(value, int) and value < 0:
+            raise ValueError(f"{where}[{name!r}] int must be >= 0, got {value!r}")
+
+
+def _migrate_raw(raw: dict) -> dict:
+    """Normalize older config shapes to the current schema."""
+    raw = _deep_copy_config(raw)
+
+    dataset = raw.pop("dataset", None)
+    if dataset is not None:
+        raw.setdefault("run", {})
+        raw["run"].setdefault("seed", dataset.get("seed"))
+
+        alphabet = dict(dataset.get("alphabet") or {})
+        if alphabet:
+            eos = alphabet.pop("eos", "#")
+            raw.setdefault("symbol_space", {})
+            raw["symbol_space"].setdefault("alphabet", alphabet)
+            raw["symbol_space"].setdefault("eos", eos)
+
+        if "trial_length" in dataset and raw.get("symseq") is not None:
+            length = dict(dataset["trial_length"])
+            length.pop("distribution", None)
+            raw["symseq"].setdefault("trial_constraints", {})
+            raw["symseq"]["trial_constraints"].setdefault("length", length)
+
+        if "splits" in dataset and raw.get("seqbench") is not None:
+            raw["seqbench"].setdefault("splits", dict(dataset["splits"]))
+
+    if raw.get("symseq") is not None:
+        symseq = raw["symseq"]
+        generator = symseq.setdefault("generator", {})
+        trial_set = symseq.get("trial_set")
+        if trial_set and "gen_params" in trial_set:
+            generator.setdefault("trial_params", dict(trial_set.pop("gen_params") or {}))
+
+    return raw
+
+
+def _deep_copy_config(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _deep_copy_config(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_deep_copy_config(v) for v in value]
+    return value

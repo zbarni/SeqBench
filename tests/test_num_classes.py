@@ -79,12 +79,15 @@ _GRAMMAR = {
 
 def _raw(task, *, symseq_tasks=None, generator=None):
     cfg = {
-        "dataset": {"seed": 1, "alphabet": {"size": 4, "eos": "#"},
-                    "trial_length": {"min": 1, "max": 20},
-                    "splits": {"train": 8, "test": 4}},
-        "symseq": {"generator": generator or _GRAMMAR},
+        "run": {"seed": 1},
+        "symbol_space": {"alphabet": {"size": 4}, "eos": "#"},
+        "symseq": {
+            "generator": generator or _GRAMMAR,
+            "trial_constraints": {"length": {"min": 1, "max": 20}},
+        },
         "seqbench": {
             "mode": "online", "prob_generator_type": "restricted",
+            "splits": {"train": 8, "test": 4},
             "storage": {"path": "/tmp/sb_numclasses_test"},
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},

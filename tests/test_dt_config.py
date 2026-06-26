@@ -11,6 +11,7 @@ from seqbench.dataset import (
     create_base_dataset_from_config,
     initial_time_grid_from_config,
 )
+from seqbench.utils import to_plain_data
 
 
 def _raw(**seqbench_overrides):
@@ -18,6 +19,7 @@ def _raw(**seqbench_overrides):
     seqbench = {
         "mode": "online",
         "prob_generator_type": "restricted",
+        "splits": {"train": 8, "test": 4},
         "storage": {"path": "/tmp/sb_dt_test"},
         "time_grid": {"dt": 0.1},
         "composition": {"combine_sequences": False, "sample_length": 20},
@@ -26,12 +28,8 @@ def _raw(**seqbench_overrides):
     }
     seqbench.update(seqbench_overrides)
     return {
-        "dataset": {
-            "seed": 1,
-            "alphabet": {"size": 4, "eos": "#"},
-            "trial_length": {"min": 1, "max": 20},
-            "splits": {"train": 8, "test": 4},
-        },
+        "run": {"seed": 1},
+        "symbol_space": {"alphabet": {"size": 4}, "eos": "#"},
         "seqbench": seqbench,
     }
 
@@ -40,13 +38,44 @@ def test_time_grid_is_required():
     seqbench = _raw()["seqbench"]
     seqbench.pop("time_grid")
     with pytest.raises(ValueError, match="missing required keys.*time_grid"):
-        cfg_mod.load({"dataset": _raw()["dataset"], "seqbench": seqbench})
+        cfg_mod.load({
+            "run": _raw()["run"],
+            "symbol_space": _raw()["symbol_space"],
+            "seqbench": seqbench,
+        })
 
 
 def test_time_grid_explicit():
     cfg = cfg_mod.load(_raw(time_grid={"dt": 0.05}))
     assert cfg.seqbench.time_grid.dt == 0.05
     assert cfg.seqbench.time_grid.validation == "error"
+
+
+def test_old_dataset_schema_migrates_to_new_sections():
+    raw = {
+        "dataset": {
+            "seed": 7,
+            "alphabet": {"size": 4, "eos": "#"},
+            "trial_length": {"min": 2, "max": 9, "distribution": "uniform"},
+            "splits": {"train": 8, "test": 4},
+        },
+        "symseq": {
+            "generator": {"type": "NBack", "params": {"n": 2, "seq_length": 8}},
+            "trial_set": {"n_trials": 12, "gen_params": {"seq_length": 9}},
+        },
+        "seqbench": _raw()["seqbench"],
+    }
+
+    cfg = cfg_mod.load(raw)
+    plain = to_plain_data(cfg)
+
+    assert "dataset" not in plain
+    assert plain["run"]["seed"] == 7
+    assert plain["symbol_space"] == {"alphabet": {"size": 4, "symbols": None}, "eos": "#"}
+    assert plain["symseq"]["trial_constraints"]["length"] == {"min": 2, "max": 9}
+    assert plain["symseq"]["generator"]["trial_params"] == {"seq_length": 9}
+    assert "gen_params" not in plain["symseq"].get("trial_set", {})
+    assert plain["seqbench"]["splits"] == {"train": 8, "test": 4}
 
 
 def test_time_grid_validation_mode():

@@ -24,12 +24,8 @@ pytestmark = pytest.mark.skipif(not HAS_SYMSEQ, reason="symseq not available")
 
 def _raw(storage_path):
     return {
-        "dataset": {
-            "seed": 1,
-            "alphabet": {"size": 4, "eos": "#"},
-            "trial_length": {"min": 1, "max": 8},
-            "splits": {"train": 6, "test": 3},
-        },
+        "run": {"seed": 1},
+        "symbol_space": {"alphabet": {"size": 4}, "eos": "#"},
         "symseq": {
             "generator": {
                 "type": "ArtificialGrammar",
@@ -43,6 +39,7 @@ def _raw(storage_path):
                     "assume_equiprobable": True,
                 },
             },
+            "trial_constraints": {"length": {"min": 1, "max": 8}},
             "tasks": [
                 {
                     "name": "next_token",
@@ -54,6 +51,7 @@ def _raw(storage_path):
         "seqbench": {
             "mode": "file",
             "prob_generator_type": "restricted",
+            "splits": {"train": 6, "test": 3},
             "storage": {"path": str(storage_path), "force_rebuild": True},
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": True, "sample_length": 8},
@@ -84,7 +82,7 @@ def _example_onehot_alpha_rate_spikes(tmp_path, name):
     )
     with open(config_path) as f:
         raw = yaml.safe_load(f)
-    raw["dataset"]["splits"] = {"train": 8, "test": 0}
+    raw["seqbench"]["splits"] = {"train": 8, "test": 0}
     raw["seqbench"]["storage"]["path"] = str(tmp_path / name)
     raw["seqbench"]["storage"]["force_rebuild"] = True
     return raw
@@ -129,7 +127,7 @@ def test_build_dataset_accepts_raw_config_dict(tmp_path):
     ds = build_dataset(_raw(tmp_path / "cache"), split="train")
 
     assert len(ds) == 6
-    assert ds._cache_manifest["source_config"]["dataset"]["seed"] == 1
+    assert ds._cache_manifest["source_config"]["run"]["seed"] == 1
 
 
 def test_build_dataloader_wires_collate(tmp_path):

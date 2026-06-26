@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 
-CACHE_KEY_VERSION = 1
+CACHE_KEY_VERSION = 2
 GENERATED_DATASET_FORMAT_VERSION = 2
 
 
@@ -54,23 +54,27 @@ def sequence_cache_key_data(run_cfg, split, split_size=None):
     ``SeqDataset.__getitem__`` but not the generated symbolic sequence file.
     """
     if split_size is None:
-        split_size = run_cfg.dataset.split_size(split)
+        split_size = run_cfg.seqbench.split_size(split)
 
     symseq = run_cfg.symseq
     generator = {}
     symseq_tasks = []
     trial_params = {}
-    effective_symseq_seed = run_cfg.dataset.seed
+    effective_symseq_seed = run_cfg.run.seed
+    trial_constraints = {}
     if symseq is not None:
+        from seqbench.config import resolve_trial_params
+
         effective_symseq_seed = (
-            symseq.seed if symseq.seed is not None else run_cfg.dataset.seed
+            symseq.seed if symseq.seed is not None else run_cfg.run.seed
         )
         generator = to_plain_data(symseq.generator)
-        trial_params = to_plain_data(symseq.generator.trial_params)
+        trial_params = to_plain_data(resolve_trial_params(symseq))
         symseq_tasks = to_plain_data(symseq.tasks)
+        trial_constraints = to_plain_data(symseq.trial_constraints)
         _apply_inherited_generator_defaults(
             generator,
-            dataset_cfg=run_cfg.dataset,
+            symbol_space_cfg=run_cfg.symbol_space,
             seed=effective_symseq_seed,
         )
 
@@ -79,7 +83,11 @@ def sequence_cache_key_data(run_cfg, split, split_size=None):
     task = {}
     prob_generator_type = None
     if run_cfg.seqbench is not None:
-        seqbench_seed = run_cfg.seqbench.seed
+        seqbench_seed = (
+            run_cfg.seqbench.seed
+            if run_cfg.seqbench.seed is not None
+            else run_cfg.run.seed
+        )
         composition = to_plain_data(run_cfg.seqbench.composition)
         task = to_plain_data(run_cfg.seqbench.task)
         prob_generator_type = run_cfg.seqbench.prob_generator_type
@@ -89,19 +97,18 @@ def sequence_cache_key_data(run_cfg, split, split_size=None):
         "generated_dataset_format_version": GENERATED_DATASET_FORMAT_VERSION,
         "split": split,
         "split_size": split_size,
-        "dataset": {
-            "seed": run_cfg.dataset.seed,
-            "alphabet": to_plain_data(run_cfg.dataset.alphabet),
-            "trial_length": to_plain_data(run_cfg.dataset.trial_length),
-        },
+        "run": to_plain_data(run_cfg.run),
+        "symbol_space": to_plain_data(run_cfg.symbol_space),
         "symseq": {
             "seed": effective_symseq_seed,
             "generator": generator,
             "generator_trial_params": trial_params,
+            "trial_constraints": trial_constraints,
             "tasks": symseq_tasks,
         },
         "seqbench": {
             "seed": seqbench_seed,
+            "splits": to_plain_data(run_cfg.seqbench.splits if run_cfg.seqbench else {}),
             "composition": composition,
             "task": task,
             "prob_generator_type": prob_generator_type,
@@ -139,7 +146,7 @@ def build_cache_manifest(
 ):
     """Return manifest metadata written next to generated sequence files."""
     if split_size is None:
-        split_size = run_cfg.dataset.split_size(split)
+        split_size = run_cfg.seqbench.split_size(split)
     cache_key = build_sequence_cache_key(run_cfg, split, split_size)
     manifest = {
         "cache_key_version": CACHE_KEY_VERSION,
@@ -156,7 +163,7 @@ def build_cache_manifest(
     return manifest
 
 
-def _apply_inherited_generator_defaults(generator, *, dataset_cfg, seed):
+def _apply_inherited_generator_defaults(generator, *, symbol_space_cfg, seed):
     """Mirror build_symseq_source inheritance so cache keys match real sources."""
     if not generator:
         return
@@ -164,10 +171,15 @@ def _apply_inherited_generator_defaults(generator, *, dataset_cfg, seed):
     gen_type = generator.get("type")
     if gen_type == "ArtificialGrammar":
         mode = generator.get("mode")
-        if mode in (None, "random"):
-            params.setdefault("alphabet_size", dataset_cfg.alphabet.size)
-            if dataset_cfg.alphabet.eos is not None:
-                params.setdefault("eos", dataset_cfg.alphabet.eos)
+        if mode in (None, "random") and symbol_space_cfg is not None:
+            params.setdefault("alphabet_size", symbol_space_cfg.alphabet.size)
+            if symbol_space_cfg.eos is not None:
+                params.setdefault("eos", symbol_space_cfg.eos)
+    elif gen_type == "NBack" and symbol_space_cfg is not None:
+        if getattr(symbol_space_cfg.alphabet, "symbols", None) is not None:
+            params.setdefault("alphabet", symbol_space_cfg.alphabet.resolved_symbols)
+        else:
+            params.setdefault("alphabet_size", symbol_space_cfg.alphabet.size)
     if seed is not None and "seed" not in params and "rng" not in params:
         params.setdefault("seed", seed)
 
@@ -193,11 +205,20 @@ def _get_config_hash_from_run_cfg(run_cfg, dataset_size=None):
     else:
         key["generator"] = {}
 
-    key["seq_len_max"] = run_cfg.dataset.trial_length.max
-    key["seq_len_min"] = run_cfg.dataset.trial_length.min
+    length_cfg = (
+        run_cfg.symseq.trial_constraints.length
+        if run_cfg.symseq is not None
+        and run_cfg.symseq.trial_constraints is not None
+        else None
+    )
+    key["trial_constraints"] = (
+        {"length": {"min": length_cfg.min, "max": length_cfg.max}}
+        if length_cfg is not None
+        else None
+    )
     key["combined_seq_length"] = run_cfg.seqbench.composition.sample_length
     if dataset_size is not None:
         key["dataset_size"] = dataset_size
-    key["seed"] = run_cfg.dataset.seed
+    key["seed"] = run_cfg.run.seed
 
     return hashlib.md5(pformat(key).encode("utf-8")).hexdigest()
