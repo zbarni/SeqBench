@@ -36,6 +36,7 @@ seqbench = "seqbench.cli:main"
 [project.optional-dependencies]
 audio = [
     "torchaudio",
+    "torchcodec",
 ]
 hdf5 = [
     "h5py",
@@ -71,6 +72,7 @@ all = [
     "symseq>=0.1.0",
     "tonic",
     "torchaudio",
+    "torchcodec",
     "wandb",
 ]
 dev = [

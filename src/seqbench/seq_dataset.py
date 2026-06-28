@@ -835,6 +835,12 @@ class SeqDataset(Dataset):
             per_element_values: per-element target ints (``sample.target_seq``).
             durations: per-element timestep counts (``data_t + delay_dur``),
                 in the same element order as ``per_element_values``.
+
+        # TODO: gap timesteps currently inherit the preceding symbol's target (because
+        # data_t + delay_dur are folded into a single duration bucket). To allow
+        # explicit control, split each bucket into a symbol portion (data_t, keeps val)
+        # and a gap portion (delay_dur, filled with pad_index or a configurable value),
+        # and expose a gap_target option in _GapProfile / gap_profile config.
         """
         return torch.cat(
             [

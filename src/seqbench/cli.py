@@ -94,6 +94,7 @@ def show_sample(
     """Render one sample from a configured dataloader."""
     try:
         import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
         import numpy as np
     except ImportError as exc:
         raise typer.BadParameter(
@@ -136,10 +137,17 @@ def show_sample(
 
     sequence = debug_class_seq[sample].detach().cpu().numpy()
     sample_length = int(lengths[sample])
+
+    tpg = getattr(dataset, "target_prob_generator", None)
+    if tpg is not None and hasattr(tpg, "id_to_red_state"):
+        sym_seq = [tpg.id_to_red_state(int(c)) for c in sequence[:sample_length]]
+    else:
+        sym_seq = sequence[:sample_length].tolist()
+
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5.5, 4.5), sharex=True)
     ax1.imshow(np.transpose(tensor.detach().cpu().numpy(), [1, 0]), aspect="auto", origin="lower", cmap="Greys")
     ax1.set_ylabel("Inp. ch.")
-    ax1.set_title(f"Inputs={sequence.tolist()}")
+    ax1.set_title(f"Inputs={sym_seq}")
 
     if target_probs is not None:
         target_img = np.transpose(target_probs[sample].detach().cpu().numpy(), [1, 0])
@@ -147,7 +155,8 @@ def show_sample(
         target_img = torch.nn.functional.one_hot(labels[sample, :sample_length].long())
         target_img = torch.swapaxes(target_img, 0, 1).detach().cpu().numpy()
     ax2.imshow(target_img, aspect="auto", origin="lower", cmap="Greys")
-    ax2.set_ylabel("Targ. ch.")
+    ax2.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+    ax2.set_ylabel("Target class")
     ax2.set_xlabel("Time steps")
     fig.tight_layout()
     fig.savefig(sample_path, dpi=600)
