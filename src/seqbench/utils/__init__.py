@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 
 
-CACHE_KEY_VERSION = 2
-GENERATED_DATASET_FORMAT_VERSION = 2
+CACHE_KEY_VERSION = 3
+GENERATED_DATASET_FORMAT_VERSION = 3
 
 
 def parse_gap_duration(identifier):
@@ -202,8 +202,10 @@ def _get_config_hash_from_run_cfg(run_cfg, dataset_size=None):
         if gen.get("mode") is not None:
             gen["mode"] = str(gen["mode"].value) if hasattr(gen["mode"], "value") else str(gen["mode"])
         key["generator"] = gen
+        key["symseq_tasks"] = to_plain_data(run_cfg.symseq.tasks)
     else:
         key["generator"] = {}
+        key["symseq_tasks"] = []
 
     length_cfg = (
         run_cfg.symseq.trial_constraints.length
@@ -220,5 +222,6 @@ def _get_config_hash_from_run_cfg(run_cfg, dataset_size=None):
     if dataset_size is not None:
         key["dataset_size"] = dataset_size
     key["seed"] = run_cfg.run.seed
+    key["seqbench_task"] = to_plain_data(run_cfg.seqbench.task)
 
     return hashlib.md5(pformat(key).encode("utf-8")).hexdigest()

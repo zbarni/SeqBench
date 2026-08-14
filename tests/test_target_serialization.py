@@ -91,13 +91,17 @@ def test_write_rejects_mismatched_class_and_state_lengths():
         DatasetGenerator.write_gensample_to_file(io.StringIO(), gs)
 
 
-def test_roundtrip_nback_intrinsic_targets():
-    symseq = pytest.importorskip("symseq")
+def test_roundtrip_configured_nback_targets():
+    pytest.importorskip("symseq")
     from symseq.generators.nback import NBack
+    from symseq.tasks import ConfiguredTrialSource, build_tasks
     from seqbench.seq_utils.generator import SequenceGenerator
 
     gen = SequenceGenerator(
-        NBack(n=2, seq_length=8, alphabet_size=5, seed=1),
+        ConfiguredTrialSource(
+            NBack(n=2, seq_length=8, alphabet_size=5, seed=1),
+            build_tasks([{"id": "match", "type": "NBackMatch"}]),
+        ),
         combine_sequences=False,
         combined_seq_len=20,
         seed=3,

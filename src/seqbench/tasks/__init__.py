@@ -4,8 +4,8 @@
 """Task definitions. Importing this package eagerly registers all built-in
 tasks so :func:`seqbench.tasks.registry.build` works without per-class imports.
 
-Naming mirrors ``symseq.tasks`` so a config can swap
-``task.source: symseq`` ↔ ``task.source: seqbench`` for the same task name
+Types mirror ``symseq.tasks`` so a config can swap
+``task.source: symseq`` and ``task.source: seqbench`` for the same task type
 (e.g. ``NStepPrediction``) without changes to params.
 """
 

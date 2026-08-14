@@ -6,7 +6,7 @@ Shift-based tasks: predict the class-id n steps back (memory) or n steps
 forward (prediction) within a ``GeneratorSample.class_seq``.
 
 Semantics mirror ``symseq.tasks.shift`` exactly so that ``source: symseq``
-and ``source: seqbench`` with the same task name+params produce equivalent
+and ``source: seqbench`` with the same task type+params produce equivalent
 training targets (modulo the symbols-vs-class_ids representation).
 """
 
@@ -35,7 +35,6 @@ class NStepMemory(Task):
         if not isinstance(n, int) or n < 1:
             raise ValueError(f"NStepMemory.n must be a positive int, got {n!r}")
         self.n = n
-        self.name = f"{n}_step_memory"
 
     def __call__(self, sample: GeneratorSample) -> Target:
         seq = list(sample.class_seq)
@@ -61,7 +60,6 @@ class NStepPrediction(Task):
         if not isinstance(n, int) or n < 1:
             raise ValueError(f"NStepPrediction.n must be a positive int, got {n!r}")
         self.n = n
-        self.name = f"{n}_step_prediction"
 
     def __call__(self, sample: GeneratorSample) -> Target:
         seq = list(sample.class_seq)

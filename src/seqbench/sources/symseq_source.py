@@ -78,7 +78,7 @@ def build_symseq_source(config: Any) -> Any:
                 seed=params.get("seed", seed if seed is not None else 42),
             )
             _validate_symbol_space(source, symbol_space_cfg)
-            return source
+            return _with_configured_tasks(source, config)
         if ag_preset:
             # Legacy dict path: top-level "preset" key.
             source = ArtificialGrammar.from_preset(
@@ -86,20 +86,29 @@ def build_symseq_source(config: Any) -> Any:
                 seed=params.get("seed", seed if seed is not None else 42),
             )
             _validate_symbol_space(source, symbol_space_cfg)
-            return source
+            return _with_configured_tasks(source, config)
         if ag_mode in (None, "random"):
             _inherit_symbol_space_defaults(params, gen_type, ag_mode, symbol_space_cfg)
             _inherit_seed(params, seed)
             source = ArtificialGrammar.from_constraints(**params)
             _validate_symbol_space(source, symbol_space_cfg)
-            return source
+            return _with_configured_tasks(source, config)
 
     _inherit_symbol_space_defaults(params, gen_type, ag_mode, symbol_space_cfg)
     _inherit_seed(params, seed)
 
     source = build(gen_type, **params)
     _validate_symbol_space(source, symbol_space_cfg)
-    return source
+    return _with_configured_tasks(source, config)
+
+
+def _with_configured_tasks(source: Any, config: Any) -> Any:
+    if not hasattr(config, "symseq") or config.symseq is None:
+        return source
+    from symseq.tasks import ConfiguredTrialSource, build_tasks
+
+    tasks = build_tasks(config.symseq.tasks)
+    return ConfiguredTrialSource(source, tasks)
 
 
 def _normalise_config(config: Any) -> tuple[Any, Any | None, int | None]:

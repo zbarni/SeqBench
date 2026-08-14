@@ -82,8 +82,6 @@ class Classification(Task):
         # "base" labels live in the base dataset's class space; first/last/current
         # are symbolic class ids.
         self.label_space = "base_label" if label_source == "base" else "class_id"
-        suffix = f"_{level}" if level == "per_token" else ""
-        self.name = f"classification_{label_source}{suffix}"
 
     @property
     def needs_base_dataset(self) -> bool:
@@ -137,7 +135,6 @@ class StateClassification(Task):
     label_space = "unreduced_state"
 
     def __init__(self):
-        self.name = "state_classification"
         self.state_id_fn = None
 
     def __call__(self, sample: GeneratorSample) -> Target:

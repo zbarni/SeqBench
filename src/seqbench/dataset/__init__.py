@@ -29,10 +29,11 @@ def has_time_creating_transform(input_mapping):
         elif isinstance(behavior, dict) and behavior.get("kind") == "create":
             return True
 
-        name = transform["name"].split(".")[-1]
-        if name in _TIME_CREATING_TRANSFORMS:
+        transform_type = transform["type"].split(".")[-1]
+        params = transform.get("params") or {}
+        if transform_type in _TIME_CREATING_TRANSFORMS:
             return True
-        if name == "PoissonEncoding" and not transform.get("temporal", False):
+        if transform_type == "PoissonEncoding" and not params.get("temporal", False):
             return True
     return False
 

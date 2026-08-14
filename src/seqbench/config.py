@@ -22,7 +22,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-
 # ----------------------------- enums ------------------------------------------
 
 
@@ -151,15 +150,23 @@ class GeneratorCfg:
 
 @dataclass
 class SymseqTaskEntry:
-    name: str
+    id: str
     type: str
     params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not self.name:
-            raise ValueError(f"symseq.tasks[*].name must be a non-empty string, got {self.name!r}")
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError(
+                f"symseq.tasks[*].id must be a non-empty string, got {self.id!r}"
+            )
         if not isinstance(self.type, str) or not self.type:
-            raise ValueError(f"symseq.tasks[*].type must be a non-empty string, got {self.type!r}")
+            raise ValueError(
+                f"symseq.tasks[*].type must be a non-empty string, got {self.type!r}"
+            )
+        if not isinstance(self.params, dict):
+            raise ValueError(
+                f"symseq.tasks[*].params must be a mapping, got {self.params!r}"
+            )
 
 
 @dataclass
@@ -200,9 +207,11 @@ class SymseqCfg:
     def __post_init__(self) -> None:
         seen: set[str] = set()
         for t in self.tasks:
-            if t.name in seen:
-                raise ValueError(f"symseq.tasks[*].name must be unique; duplicate {t.name!r}")
-            seen.add(t.name)
+            if t.id in seen:
+                raise ValueError(
+                    f"symseq.tasks[*].id must be unique; duplicate {t.id!r}"
+                )
+            seen.add(t.id)
 
 
 # ----------------------------- seqbench ---------------------------------------
@@ -266,39 +275,84 @@ class InputMappingCfg:
     def __post_init__(self) -> None:
         if not isinstance(self.base, str) or not self.base:
             raise ValueError(f"input_mapping.base must be a non-empty string, got {self.base!r}")
+        if not isinstance(self.transforms, list):
+            raise ValueError(
+                f"input_mapping.transforms must be a list, got {self.transforms!r}"
+            )
         for i, t in enumerate(self.transforms):
-            if not isinstance(t, dict) or "name" not in t:
+            where = f"input_mapping.transforms[{i}]"
+            if not isinstance(t, dict):
+                raise ValueError(f"{where} must be a mapping, got {t!r}")
+            unknown = set(t) - {"type", "params", "time_behavior"}
+            if unknown:
                 raise ValueError(
-                    f"input_mapping.transforms[{i}] must be a dict with a 'name' key, got {t!r}"
+                    f"{where} has unknown keys {sorted(unknown)}; allowed keys are "
+                    "['params', 'time_behavior', 'type']"
+                )
+            transform_type = t.get("type")
+            if not isinstance(transform_type, str) or not transform_type:
+                raise ValueError(
+                    f"{where}.type must be a non-empty string, got {transform_type!r}"
+                )
+            params = t.get("params", {})
+            if not isinstance(params, dict):
+                raise ValueError(f"{where}.params must be a mapping, got {params!r}")
+            time_behavior = t.get("time_behavior")
+            if time_behavior is not None and not isinstance(time_behavior, (str, dict)):
+                raise ValueError(
+                    f"{where}.time_behavior must be a string or mapping, "
+                    f"got {time_behavior!r}"
                 )
 
 
 @dataclass
 class SeqbenchTaskCfg:
     source: TaskSource
-    name: str | None = None      # source=symseq: must reference a symseq.tasks entry
-    type: str | None = None      # source=seqbench: name from seqbench.tasks registry
+    id: str | None = None        # source=seqbench: configured target key
+    ref_id: str | None = None    # source=symseq: referenced symseq.tasks id
+    type: str | None = None      # source=seqbench: seqbench.tasks registry key
     params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, TaskSource):
             self.source = TaskSource(self.source)
         if self.source == TaskSource.SYMSEQ:
-            if not self.name:
-                raise ValueError("seqbench.task with source='symseq' requires 'name'")
+            if not self.ref_id:
+                raise ValueError("seqbench.task with source='symseq' requires 'ref_id'")
+            if self.id:
+                raise ValueError(
+                    "seqbench.task with source='symseq' must NOT set 'id'"
+                )
             if self.type:
                 raise ValueError(
                     "seqbench.task with source='symseq' must NOT set 'type' "
-                    "(use 'name' to point at a symseq.tasks entry)"
+                    "(use 'ref_id' to point at a symseq.tasks entry)"
+                )
+            if self.params:
+                raise ValueError(
+                    "seqbench.task with source='symseq' must NOT set 'params'"
                 )
         else:  # SEQBENCH
+            if not self.id:
+                raise ValueError("seqbench.task with source='seqbench' requires 'id'")
             if not self.type:
                 raise ValueError("seqbench.task with source='seqbench' requires 'type'")
-            if self.name:
+            if self.ref_id:
                 raise ValueError(
-                    "seqbench.task with source='seqbench' must NOT set 'name' "
-                    "(use 'type' to name a registered seqbench task)"
+                    "seqbench.task with source='seqbench' must NOT set 'ref_id'"
                 )
+        if self.id is not None and (not isinstance(self.id, str) or not self.id):
+            raise ValueError(f"seqbench.task.id must be a non-empty string, got {self.id!r}")
+        if self.ref_id is not None and (
+            not isinstance(self.ref_id, str) or not self.ref_id
+        ):
+            raise ValueError(
+                f"seqbench.task.ref_id must be a non-empty string, got {self.ref_id!r}"
+            )
+        if not isinstance(self.params, dict):
+            raise ValueError(
+                f"seqbench.task.params must be a mapping, got {self.params!r}"
+            )
 
 
 @dataclass
@@ -349,12 +403,17 @@ class RunConfig:
         # Cross-section consistency: source='symseq' requires a symseq.tasks entry.
         if self.symseq is not None and self.seqbench is not None:
             if self.seqbench.task.source == TaskSource.SYMSEQ:
-                names = {t.name for t in self.symseq.tasks}
-                if self.seqbench.task.name not in names:
+                ids = {t.id for t in self.symseq.tasks}
+                if self.seqbench.task.ref_id not in ids:
                     raise ValueError(
-                        f"seqbench.task.name={self.seqbench.task.name!r} does not match any "
-                        f"symseq.tasks[*].name (available: {sorted(names) or 'none'})"
+                        f"seqbench.task.ref_id={self.seqbench.task.ref_id!r} does not match any "
+                        f"symseq.tasks[*].id (available: {sorted(ids) or 'none'})"
                     )
+            elif self.seqbench.task.id in {t.id for t in self.symseq.tasks}:
+                raise ValueError(
+                    f"seqbench.task.id={self.seqbench.task.id!r} collides with a "
+                    "symseq.tasks[*].id"
+                )
         if self.seqbench is not None and self.seqbench.task.source == TaskSource.SYMSEQ:
             if self.symseq is None:
                 raise ValueError(
@@ -435,7 +494,10 @@ def _parse_symseq(raw: dict) -> SymseqCfg:
             else None
         )
         trial_constraints = TrialConstraintsCfg(length=length)
-    tasks = [SymseqTaskEntry(**t) for t in (raw.get("tasks") or [])]
+    tasks = [
+        _parse_symseq_task(t, index=i)
+        for i, t in enumerate(raw.get("tasks") or [])
+    ]
     storage = SymseqStorageCfg(**raw["storage"]) if raw.get("storage") else None
     trial_set = (
         SymseqTrialSetCfg(
@@ -477,7 +539,7 @@ def _parse_seqbench(raw: dict) -> SeqbenchCfg:
         gap_profile=GapProfileCfg(**gp_raw) if gp_raw else None,
     )
     input_mapping = InputMappingCfg(**raw["input_mapping"])
-    task = SeqbenchTaskCfg(**raw["task"])
+    task = _parse_seqbench_task(raw["task"])
     return SeqbenchCfg(
         mode=raw["mode"],
         splits=dict(raw["splits"]),
@@ -488,6 +550,47 @@ def _parse_seqbench(raw: dict) -> SeqbenchCfg:
         task=task,
         seed=raw.get("seed"),
         prob_generator_type=raw.get("prob_generator_type", "restricted"),
+    )
+
+
+def _parse_symseq_task(raw: dict, *, index: int) -> SymseqTaskEntry:
+    if not isinstance(raw, dict):
+        raise ValueError(f"symseq.tasks[{index}] must be a mapping, got {raw!r}")
+    allowed = {"id", "type", "params"}
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(f"symseq.tasks[{index}] has unknown keys {sorted(unknown)}")
+    _require_keys(raw, {"id", "type"}, where=f"symseq.tasks[{index}]")
+    return SymseqTaskEntry(
+        id=raw["id"], type=raw["type"], params=dict(raw.get("params") or {})
+    )
+
+
+def _parse_seqbench_task(raw: dict) -> SeqbenchTaskCfg:
+    if not isinstance(raw, dict):
+        raise ValueError(f"seqbench.task must be a mapping, got {raw!r}")
+    allowed = {"source", "id", "ref_id", "type", "params"}
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(f"seqbench.task has unknown keys {sorted(unknown)}")
+    _require_keys(raw, {"source"}, where="seqbench.task")
+    source = TaskSource(raw["source"])
+    if source == TaskSource.SYMSEQ:
+        _require_keys(raw, {"ref_id"}, where="seqbench.task")
+        forbidden = {"id", "type", "params"} & set(raw)
+    else:
+        _require_keys(raw, {"id", "type"}, where="seqbench.task")
+        forbidden = {"ref_id"} & set(raw)
+    if forbidden:
+        raise ValueError(
+            f"seqbench.task with source={source.value!r} forbids keys {sorted(forbidden)}"
+        )
+    return SeqbenchTaskCfg(
+        source=source,
+        id=raw.get("id"),
+        ref_id=raw.get("ref_id"),
+        type=raw.get("type"),
+        params=dict(raw.get("params") or {}),
     )
 
 

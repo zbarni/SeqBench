@@ -22,7 +22,7 @@ symseq:
       min: 1
       max: 20
   tasks:
-    - name: next_token
+    - id: next_token
       type: NStepPrediction
       params:
         n: 1
@@ -45,24 +45,28 @@ seqbench:
     base: one_hot
     base_params: {}
     transforms:
-      - name: ExpandDim
-        axis: 1
-        target_size: 700
-      - name: TemporalUnfold
-        kernel_spec:
-          shape: alpha
-          params:
-            tau: 0.01
-            width: 0.1
-        out_dt: 0.001
-        duration: 0.1
-        amplitude: 100.0
-      - name: RateCoding
-        max_rate: 200.0
-        normalize: true
-      - name: PoissonEncoding
-        temporal: true
-        spike_dt: 0.001
+      - type: ExpandDim
+        params:
+          axis: 1
+          target_size: 700
+      - type: TemporalUnfold
+        params:
+          kernel_spec:
+            shape: alpha
+            params:
+              tau: 0.01
+              width: 0.1
+          out_dt: 0.001
+          duration: 0.1
+          amplitude: 100.0
+      - type: RateCoding
+        params:
+          max_rate: 200.0
+          normalize: true
+      - type: PoissonEncoding
+        params:
+          temporal: true
+          spike_dt: 0.001
   task:
     source: symseq
-    name: next_token
+    ref_id: next_token

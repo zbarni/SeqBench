@@ -2,7 +2,7 @@
 # Copyright (c) 2025-present, SeqBench Contributors
 
 """
-Phase 1: ``SequenceGenerator`` forwards a Trial's intrinsic targets onto the
+Phase 1: ``SequenceGenerator`` forwards a Trial's configured targets onto the
 ``GeneratorSample``, aligned to the EOS-terminated class_seq, and concatenates/
 truncates them under ``combine_sequences``. per_trial targets are rejected when
 combining.
@@ -25,7 +25,17 @@ pytestmark = pytest.mark.skipif(not HAS_SYMSEQ, reason="symseq not available")
 
 
 def _nback_gen(combine, combined_seq_len=20):
-    source = NBack(n=2, seq_length=8, alphabet_size=5, seed=1)
+    from symseq.tasks import ConfiguredTrialSource, build_tasks
+
+    source = ConfiguredTrialSource(
+        NBack(n=2, seq_length=8, alphabet_size=5, seed=1),
+        build_tasks(
+            [
+                {"id": "nback_match", "type": "NBackMatch"},
+                {"id": "nback_role", "type": "NBackRole"},
+            ]
+        ),
+    )
     return SequenceGenerator(
         source,
         combine_sequences=combine,

@@ -28,7 +28,12 @@ def _enc():
 
 
 def _builder(task):
-    return TaskTargetBuilder(source=TaskSource.SEQBENCH, task=task, encoder=_enc())
+    return TaskTargetBuilder(
+        source=TaskSource.SEQBENCH,
+        task_id="test_task",
+        task=task,
+        encoder=_enc(),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -132,8 +137,8 @@ class TestSeqDatasetNumClasses:
             initial_time_grid=initial_time_grid)
 
     _SYMSEQ_NEXT = dict(
-        task={"source": "symseq", "name": "next_token"},
-        symseq_tasks=[{"name": "next_token", "type": "NStepPrediction", "params": {"n": 1}}],
+        task={"source": "symseq", "ref_id": "next_token"},
+        symseq_tasks=[{"id": "next_token", "type": "NStepPrediction", "params": {"n": 1}}],
     )
 
     def test_prediction_over_grammar(self):
@@ -142,11 +147,11 @@ class TestSeqDatasetNumClasses:
         assert ds.num_classes == 5 == ds.target_prob_generator.num_reduced_states
 
     def test_state_classification_over_grammar(self):
-        ds = self._build(_raw(task={"source": "seqbench", "type": "StateClassification"}))
+        ds = self._build(_raw(task={"source": "seqbench", "id": "state_classification", "type": "StateClassification"}))
         assert ds.num_classes == ds.target_prob_generator.num_unreduced_states == 7
 
     def test_per_trial_classification_over_grammar(self):
-        ds = self._build(_raw(task={"source": "seqbench", "type": "Classification",
+        ds = self._build(_raw(task={"source": "seqbench", "id": "classification", "type": "Classification",
                                     "params": {"label_source": "first"}}))
         # class-id label space, NOT the unreduced-state count (was wrongly 7)
         assert ds.num_classes == 5

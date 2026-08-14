@@ -35,4 +35,4 @@ def test_state_classification_requires_state_id_fn():
 def test_registry_builds_state_classification():
     task = registry.build("StateClassification")
     assert isinstance(task, StateClassification)
-    assert "StateClassification" in registry.registered_names()
+    assert "StateClassification" in registry.registered_types()

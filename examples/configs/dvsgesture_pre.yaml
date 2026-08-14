@@ -22,7 +22,7 @@ symseq:
       min: 1
       max: 20
   tasks:
-    - name: next_token
+    - id: next_token
       type: NStepPrediction
       params:
         n: 1
@@ -55,28 +55,32 @@ seqbench:
       download: true
       base_dataset_path: datasets/DVSGesture
     transforms:
-      - name: tonic.transforms.ToFrame
-        sensor_size:
-          - 128
-          - 128
-          - 2
-        time_window: 10000.0
+      - type: tonic.transforms.ToFrame
+        params:
+          sensor_size:
+            - 128
+            - 128
+            - 2
+          time_window: 10000.0
         time_behavior:
           kind: create
           out_dt: 0.01
-      - name: torch.tensor
-        dtype: torch.float32
+      - type: torch.tensor
+        params:
+          dtype: torch.float32
         time_behavior: preserve
-      - name: CenterCrop
-        sensor_size:
-          - 128
-          - 128
-          - 2
-        output_size:
-          - 10
-          - 10
-      - name: Flatten
-        start_dim: 1
+      - type: CenterCrop
+        params:
+          sensor_size:
+            - 128
+            - 128
+            - 2
+          output_size:
+            - 10
+            - 10
+      - type: Flatten
+        params:
+          start_dim: 1
   task:
     source: symseq
-    name: next_token
+    ref_id: next_token

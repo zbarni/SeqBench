@@ -9,6 +9,7 @@ from seqbench import config as cfg_mod
 from seqbench.config import InputMappingCfg
 from seqbench.dataset import (
     create_base_dataset_from_config,
+    has_time_creating_transform,
     initial_time_grid_from_config,
 )
 from seqbench.utils import to_plain_data
@@ -24,7 +25,7 @@ def _raw(**seqbench_overrides):
         "time_grid": {"dt": 0.1},
         "composition": {"combine_sequences": False, "sample_length": 20},
         "input_mapping": {"base": "one_hot", "base_params": {}, "transforms": []},
-        "task": {"source": "seqbench", "type": "StateClassification"},
+        "task": {"source": "seqbench", "id": "state_classification", "type": "StateClassification"},
     }
     seqbench.update(seqbench_overrides)
     return {
@@ -138,10 +139,12 @@ def test_one_hot_duration_rejected_with_time_creator():
         base_params={"duration": 0.3},
         transforms=[
             {
-                "name": "TemporalUnfold",
-                "out_dt": 0.01,
-                "duration": 0.1,
-                "kernel_spec": {"shape": "box", "params": {"width": 0.1}},
+                "type": "TemporalUnfold",
+                "params": {
+                    "out_dt": 0.01,
+                    "duration": 0.1,
+                    "kernel_spec": {"shape": "box", "params": {"width": 0.1}},
+                },
             }
         ],
     )
@@ -158,10 +161,12 @@ def test_one_hot_static_when_transform_creates_time():
         base_params={},
         transforms=[
             {
-                "name": "TemporalUnfold",
-                "out_dt": 0.01,
-                "duration": 0.1,
-                "kernel_spec": {"shape": "box", "params": {"width": 0.1}},
+                "type": "TemporalUnfold",
+                "params": {
+                    "out_dt": 0.01,
+                    "duration": 0.1,
+                    "kernel_spec": {"shape": "box", "params": {"width": 0.1}},
+                },
             }
         ],
     )
@@ -171,3 +176,17 @@ def test_one_hot_static_when_transform_creates_time():
     )
     assert grid is None
     assert dataset.n_steps == 1
+
+
+def test_poisson_time_creation_reads_nested_temporal_param():
+    static = InputMappingCfg(
+        base="one_hot",
+        transforms=[{"type": "PoissonEncoding", "params": {"temporal": False}}],
+    )
+    temporal = InputMappingCfg(
+        base="one_hot",
+        transforms=[{"type": "PoissonEncoding", "params": {"temporal": True}}],
+    )
+
+    assert has_time_creating_transform(static) is True
+    assert has_time_creating_transform(temporal) is False

@@ -21,24 +21,25 @@ it (e.g. ``NStepPrediction`` predicts EOS at the last real token). Masked
 positions become ``pad_index`` in the emitted numpy target.
 
 The builder is invoked per-trial at draw time by ``SequenceGenerator`` (storing
-the Target on ``GeneratorSample.targets[task.name]``); ``SeqDataset`` reads it
+the Target on ``GeneratorSample.targets[task_id]``); ``SeqDataset`` reads it
 back via :meth:`to_target_seq` (which also recomputes seqbench-source targets
 on the fly when a sample lacks them — e.g. legacy on-disk datasets).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import numpy as np
 
 from seqbench.config import TaskSource
 from seqbench.seq_utils.generator import GeneratorSample
 from seqbench.seq_utils.symbol_encoder import SymbolEncoder
+from seqbench.tasks import registry as seqbench_registry
 from seqbench.tasks.base import Target
 from seqbench.tasks.classify import StateClassification
-from seqbench.tasks import registry as seqbench_registry
 
 
 @dataclass
@@ -59,6 +60,7 @@ class TaskTargetBuilder:
         self,
         *,
         source: TaskSource,
+        task_id: str,
         task: Any,
         encoder: SymbolEncoder,
         pad_index: int = -1,
@@ -66,6 +68,7 @@ class TaskTargetBuilder:
         label_space: str | None = None,
     ):
         self.source = source
+        self.task_id = task_id
         self.task = task
         self.encoder = encoder
         self.pad_index = pad_index
@@ -86,11 +89,12 @@ class TaskTargetBuilder:
         encoder: SymbolEncoder,
         pad_index: int = -1,
         state_id_fn: Callable[[str], int] | None = None,
-    ) -> "TaskTargetBuilder":
+    ) -> TaskTargetBuilder:
         task_cfg = run_cfg.seqbench.task
         source = task_cfg.source
 
         if source == TaskSource.SEQBENCH:
+            task_id = task_cfg.id
             task = seqbench_registry.build(task_cfg.type, **task_cfg.params)
             if isinstance(task, StateClassification):
                 if state_id_fn is None:
@@ -104,17 +108,18 @@ class TaskTargetBuilder:
             if run_cfg.symseq is None:
                 raise ValueError("seqbench.task.source='symseq' requires a symseq section")
             entry = next(
-                (t for t in run_cfg.symseq.tasks if t.name == task_cfg.name), None
+                (t for t in run_cfg.symseq.tasks if t.id == task_cfg.ref_id), None
             )
             if entry is None:
                 raise ValueError(
-                    f"seqbench.task.name={task_cfg.name!r} does not match any "
-                    "symseq.tasks[*].name"
+                    f"seqbench.task.ref_id={task_cfg.ref_id!r} does not match any "
+                    "symseq.tasks[*].id"
                 )
             from symseq.tasks import registry as symseq_registry
 
+            task_id = entry.id
             task = symseq_registry.build(entry.type, **entry.params)
-            kind = _detect_symseq_kind(task)
+            kind = task.kind
 
         if (
             getattr(task, "needs_base_dataset", False)
@@ -127,16 +132,17 @@ class TaskTargetBuilder:
             )
 
         return cls(
-            source=source, task=task, encoder=encoder, pad_index=pad_index, kind=kind
+            source=source,
+            task_id=task_id,
+            task=task,
+            encoder=encoder,
+            pad_index=pad_index,
+            kind=kind,
         )
 
     @property
     def kind(self) -> Literal["per_token", "per_trial"]:
         return self._kind
-
-    @property
-    def task_name(self) -> str:
-        return self.task.name
 
     def num_classes(self, *, prob_generator=None, base_dataset=None) -> int:
         """Number of distinct classes in the task's target label space.
@@ -180,7 +186,10 @@ class TaskTargetBuilder:
             return self._run_seqbench_task(
                 GeneratorSample(class_seq, state_seq, len(class_seq))
             )
-        return self._run_symseq_task(trial, target_len=len(class_seq))
+        target = trial.targets.get(self.task_id) if trial.targets else None
+        if target is None:
+            target = self.task(trial)
+        return self._encode_symseq_target(target, target_len=len(class_seq))
 
     def to_target_seq(self, gensample: GeneratorSample) -> ResolvedTarget:
         """Materialize the target for a sample (used at sample-build time).
@@ -190,13 +199,13 @@ class TaskTargetBuilder:
         the sample when absent (e.g. legacy 3-field datasets).
         """
         target = None
-        if gensample.targets and self.task_name in gensample.targets:
-            target = gensample.targets[self.task_name]
+        if gensample.targets and self.task_id in gensample.targets:
+            target = gensample.targets[self.task_id]
         elif self.source == TaskSource.SEQBENCH:
             target = self._run_seqbench_task(gensample)
         else:
             raise RuntimeError(
-                f"Target {self.task_name!r} is missing from the sample and cannot "
+                f"Target {self.task_id!r} is missing from the sample and cannot "
                 "be recomputed for a symseq-source task. Regenerate the dataset "
                 "(seqbench.storage.force_rebuild: true) or use an online mode."
             )
@@ -211,15 +220,14 @@ class TaskTargetBuilder:
             raise ValueError("StateClassification.state_id_fn was not injected.")
         return self.task(gensample)
 
-    def _run_symseq_task(self, trial, target_len: int) -> Target:
-        t = self.task(trial)
+    def _encode_symseq_target(self, t, target_len: int) -> Target:
         if t.kind == "per_trial":
             return Target(values=_scalarize(t.values), mask=None, kind="per_trial")
 
         values = list(t.values)
         mask = list(t.mask) if t.mask is not None else [True] * len(values)
         encoded: list = []
-        for v, m in zip(values, mask):
+        for v, m in zip(values, mask, strict=True):
             if not m or v is None:
                 encoded.append(None)
             elif isinstance(v, str):
@@ -253,7 +261,7 @@ class TaskTargetBuilder:
             else [v is not None for v in values]
         )
         out = np.full(len(values), self.pad_index, dtype=int)
-        for i, (v, m) in enumerate(zip(values, mask)):
+        for i, (v, m) in enumerate(zip(values, mask, strict=True)):
             if m and v is not None:
                 out[i] = int(v)
         return ResolvedTarget(
@@ -284,16 +292,3 @@ def _scalarize(value):
     if isinstance(value, np.generic):
         return value.item()
     return value
-
-
-def _detect_symseq_kind(task) -> Literal["per_token", "per_trial"]:
-    """Determine a symseq task's output kind by running it on a tiny trial.
-
-    symseq registry tasks are pure functions of ``trial.symbols``; a 2-symbol
-    probe is safe and avoids depending on a ``kind`` attribute that symseq tasks
-    do not declare.
-    """
-    from symseq.trial import Trial
-
-    probe = Trial(symbols=["x", "y"], states=None, targets={}, meta={})
-    return task(probe).kind

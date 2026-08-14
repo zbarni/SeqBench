@@ -80,7 +80,7 @@ def test_getitem_predict_path_characterization():
 
 
 def test_getitem_state_classification_path_characterization():
-    ds = _build_dataset(_raw(task={"source": "seqbench", "type": "StateClassification"}))
+    ds = _build_dataset(_raw(task={"source": "seqbench", "id": "state_classification", "type": "StateClassification"}))
     assert ds.per_token_classify is True
     assert ds._gap_profile is None
 
@@ -104,7 +104,7 @@ def test_getitem_state_classification_path_characterization():
 
 def test_getitem_per_trial_classification_path_characterization():
     ds = _build_dataset(
-        _raw(task={"source": "seqbench", "type": "Classification",
+        _raw(task={"source": "seqbench", "id": "classification", "type": "Classification",
                    "params": {"label_source": "first"}}, combine=False)
     )
     assert ds.is_per_trial is True
@@ -160,7 +160,7 @@ def test_getitem_predict_path_with_gaps():
 
 def test_getitem_state_classification_path_with_gaps():
     ds = _build_dataset(
-        _with_gap(_raw(task={"source": "seqbench", "type": "StateClassification"}))
+        _with_gap(_raw(task={"source": "seqbench", "id": "state_classification", "type": "StateClassification"}))
     )
     assert ds.per_token_classify is True
     assert ds._gap_profile is not None
@@ -189,7 +189,7 @@ def test_getitem_state_classification_path_with_gaps():
 def test_getitem_per_trial_classification_path_with_gaps():
     ds = _build_dataset(
         _with_gap(
-            _raw(task={"source": "seqbench", "type": "Classification",
+            _raw(task={"source": "seqbench", "id": "classification", "type": "Classification",
                        "params": {"label_source": "first"}}, combine=False)
         )
     )
@@ -281,10 +281,12 @@ def test_nongrammatical_gap_filler_uses_transform_pipeline():
     raw["seqbench"]["input_mapping"]["base_params"] = {}
     raw["seqbench"]["input_mapping"]["transforms"] = [
         {
-            "name": "TemporalUnfold",
-            "kernel_spec": {"shape": "box", "params": {"width": 0.001}},
-            "out_dt": 0.001,
-            "duration": 0.010,
+            "type": "TemporalUnfold",
+            "params": {
+                "kernel_spec": {"shape": "box", "params": {"width": 0.001}},
+                "out_dt": 0.001,
+                "duration": 0.010,
+            },
         }
     ]
     raw["seqbench"]["composition"]["gap_profile"] = {

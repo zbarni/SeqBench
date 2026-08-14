@@ -42,7 +42,7 @@ def _raw(storage_path):
             "trial_constraints": {"length": {"min": 1, "max": 8}},
             "tasks": [
                 {
-                    "name": "next_token",
+                    "id": "next_token",
                     "type": "NStepPrediction",
                     "params": {"n": 1},
                 }
@@ -60,7 +60,7 @@ def _raw(storage_path):
                 "base_params": {"duration": 0.2},
                 "transforms": [],
             },
-            "task": {"source": "symseq", "name": "next_token"},
+            "task": {"source": "symseq", "ref_id": "next_token"},
         },
     }
 
@@ -91,8 +91,8 @@ def _example_onehot_alpha_rate_spikes(tmp_path, name):
 def _set_transform_param(raw, transform_name, **params):
     raw = copy.deepcopy(raw)
     for transform in raw["seqbench"]["input_mapping"]["transforms"]:
-        if transform["name"] == transform_name:
-            transform.update(params)
+        if transform["type"] == transform_name:
+            transform.setdefault("params", {}).update(params)
             return raw
     raise AssertionError(f"transform {transform_name!r} not found")
 
@@ -112,9 +112,9 @@ def test_build_dataset_from_config_path_wires_defaults(tmp_path):
     assert ds.split == "train"
     assert ds.dataset_root.startswith(str(tmp_path / "cache"))
     assert ds.initial_time_grid.dt == pytest.approx(0.1)
-    assert ds.config.seqbench.task.name == "next_token"
+    assert ds.config.seqbench.task.ref_id == "next_token"
     assert ds.input_mapping.base == "one_hot"
-    assert ds.task_config.name == "next_token"
+    assert ds.task_config.ref_id == "next_token"
     assert ds.time_grid.dt == pytest.approx(0.1)
     assert ds.dt == pytest.approx(0.1)
     assert ds.returns_target_probs is True
@@ -167,7 +167,7 @@ def test_split_aware_cache_roots_and_manifests(tmp_path):
     assert test_manifest["split"] == "test"
     assert test_manifest["split_size"] == 3
     assert train_manifest["cache_key"] != test_manifest["cache_key"]
-    assert train_manifest["source_config"]["seqbench"]["task"]["name"] == "next_token"
+    assert train_manifest["source_config"]["seqbench"]["task"]["ref_id"] == "next_token"
 
 
 def test_storage_cache_key_override_controls_cache_root(tmp_path):

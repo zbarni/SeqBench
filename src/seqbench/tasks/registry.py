@@ -4,42 +4,40 @@
 """
 Task registry — mirrors ``symseq.tasks.registry``.
 
-Each task class registers itself via ``@register("Name")``; ``build(name, **params)``
+Each task class registers itself via ``@register("Type")``; ``build(type_name, **params)``
 instantiates a registered task.
 """
 
 from __future__ import annotations
 
-from typing import Type
-
 from seqbench.tasks.base import Task
 
+_REGISTRY: dict[str, type[Task]] = {}
 
-_REGISTRY: dict[str, Type[Task]] = {}
 
+def register(type_name: str):
+    """Class decorator that registers a Task under ``type_name``."""
 
-def register(name: str):
-    """Class decorator that registers a Task under ``name``."""
-
-    def _decorator(cls: Type[Task]) -> Type[Task]:
-        if name in _REGISTRY:
+    def _decorator(cls: type[Task]) -> type[Task]:
+        if type_name in _REGISTRY:
             raise ValueError(
-                f"Task {name!r} is already registered to {_REGISTRY[name].__name__}."
+                f"Task {type_name!r} is already registered to "
+                f"{_REGISTRY[type_name].__name__}."
             )
-        _REGISTRY[name] = cls
+        _REGISTRY[type_name] = cls
         return cls
 
     return _decorator
 
 
-def build(name: str, **params) -> Task:
-    """Instantiate a registered Task by name."""
-    if name not in _REGISTRY:
+def build(type_name: str, **params) -> Task:
+    """Instantiate a registered Task by type."""
+    if type_name not in _REGISTRY:
         raise KeyError(
-            f"Unknown task {name!r}. Registered: {sorted(_REGISTRY)}"
+            f"Unknown task type {type_name!r}. Registered: {sorted(_REGISTRY)}"
         )
-    return _REGISTRY[name](**params)
+    return _REGISTRY[type_name](**params)
 
 
-def registered_names() -> list[str]:
+def registered_types() -> list[str]:
     return sorted(_REGISTRY)

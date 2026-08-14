@@ -267,7 +267,7 @@ class SequenceGenerator:
         )
 
         # Resolve the configured training target (if a builder is wired in) and
-        # store it alongside any intrinsic targets, keyed by the task name.
+        # store it alongside other configured targets, keyed by the task id.
         # resolve() returns None for deferred tasks (e.g. label_source="base")
         # that need base-dataset context only available in SeqDataset.
         if self.task_builder is not None and trial is not None:
@@ -275,7 +275,7 @@ class SequenceGenerator:
             if resolved is not None:
                 if targets is None:
                     targets = {}
-                targets[self.task_builder.task_name] = resolved
+                targets[self.task_builder.task_id] = resolved
 
         meta = dict(trial.meta) if trial is not None and trial.meta else None
 

@@ -40,7 +40,10 @@ def _gs():
 class TestSeqbenchSource:
     def test_nstep_prediction_resolve(self):
         b = TaskTargetBuilder(
-            source=TaskSource.SEQBENCH, task=NStepPrediction(1), encoder=_encoder()
+            source=TaskSource.SEQBENCH,
+            task_id="prediction",
+            task=NStepPrediction(1),
+            encoder=_encoder(),
         )
         gs = _gs()
         target = b.resolve(None, gs.class_seq, gs.state_seq)
@@ -54,7 +57,10 @@ class TestSeqbenchSource:
         task = StateClassification()
         task.state_id_fn = lambda s: id_map[s]
         b = TaskTargetBuilder(
-            source=TaskSource.SEQBENCH, task=task, encoder=_encoder()
+            source=TaskSource.SEQBENCH,
+            task_id="states",
+            task=task,
+            encoder=_encoder(),
         )
         gs = _gs()
         res = b.to_target_seq(
@@ -66,7 +72,10 @@ class TestSeqbenchSource:
     def test_to_target_seq_recomputes_when_absent(self):
         # legacy on-disk sample (targets=None) -> seqbench task recomputed
         b = TaskTargetBuilder(
-            source=TaskSource.SEQBENCH, task=NStepPrediction(1), encoder=_encoder()
+            source=TaskSource.SEQBENCH,
+            task_id="prediction",
+            task=NStepPrediction(1),
+            encoder=_encoder(),
         )
         res = b.to_target_seq(_gs())
         np.testing.assert_array_equal(res.target_seq, [2, 3, 0, -1])
@@ -75,11 +84,14 @@ class TestSeqbenchSource:
         from seqbench.tasks.base import Target
 
         b = TaskTargetBuilder(
-            source=TaskSource.SEQBENCH, task=NStepPrediction(1), encoder=_encoder()
+            source=TaskSource.SEQBENCH,
+            task_id="prediction",
+            task=NStepPrediction(1),
+            encoder=_encoder(),
         )
         gs = _gs()
         gs.targets = {
-            b.task_name: Target(values=[9, 9, 9, None], mask=[True, True, True, False], kind="per_token")
+            b.task_id: Target(values=[9, 9, 9, None], mask=[True, True, True, False], kind="per_token")
         }
         res = b.to_target_seq(gs)
         np.testing.assert_array_equal(res.target_seq, [9, 9, 9, -1])
@@ -89,6 +101,7 @@ class TestSeqbenchSource:
 
         b = TaskTargetBuilder(
             source=TaskSource.SEQBENCH,
+            task_id="classification",
             task=Classification(label_source="first"),
             encoder=_encoder(),
             kind="per_trial",
@@ -106,6 +119,7 @@ class TestSeqbenchSource:
 
         b = TaskTargetBuilder(
             source=TaskSource.SEQBENCH,
+            task_id="classification",
             task=task,
             encoder=_encoder(),
             pad_index=-1,
@@ -123,6 +137,7 @@ class TestSeqbenchSource:
 
         b = TaskTargetBuilder(
             source=TaskSource.SEQBENCH,
+            task_id="classification",
             task=Classification(label_source="first", level="per_token"),
             encoder=_encoder(),
             pad_index=-1,
@@ -152,7 +167,10 @@ class TestSymseqSource:
     def test_nstep_prediction_resolve_and_encode(self):
         task = symseq_registry.build("NStepPrediction", n=1)
         b = TaskTargetBuilder(
-            source=TaskSource.SYMSEQ, task=task, encoder=_encoder()
+            source=TaskSource.SYMSEQ,
+            task_id="next_token",
+            task=task,
+            encoder=_encoder(),
         )
         target = b.resolve(self._trial(), np.array([1, 2, 3, 0]), None)
         # symseq task runs on symbols (no EOS); last real token is masked,
@@ -162,20 +180,22 @@ class TestSymseqSource:
 
     def test_kind_detected_per_token(self):
         task = symseq_registry.build("NStepPrediction", n=1)
-        b = TaskTargetBuilder(source=TaskSource.SYMSEQ, task=task, encoder=_encoder())
-        # from_run_cfg sets kind via detection; direct ctor defaults per_token
-        from seqbench.tasks.target_builder import _detect_symseq_kind
-        assert _detect_symseq_kind(task) == "per_token"
+        assert task.kind == "per_token"
 
     def test_per_trial_intrinsic_scalarized(self):
         # a per_trial symseq Target (e.g. grammaticality) -> scalar int
         class _GramTask:
-            name = "grammaticality"
+            kind = "per_trial"
+
             def __call__(self, trial):
                 return SymseqTarget(values=True, mask=None, kind="per_trial")
 
         b = TaskTargetBuilder(
-            source=TaskSource.SYMSEQ, task=_GramTask(), encoder=_encoder(), kind="per_trial"
+            source=TaskSource.SYMSEQ,
+            task_id="grammaticality",
+            task=_GramTask(),
+            encoder=_encoder(),
+            kind="per_trial",
         )
         target = b.resolve(self._trial(), np.array([1, 2, 3, 0]), None)
         assert target.kind == "per_trial"
@@ -196,7 +216,7 @@ def test_from_run_cfg_symseq_source():
         "symseq": {
             "generator": {"type": "NBack", "params": {"n": 2, "alphabet_size": 3, "seq_length": 8}},
             "trial_constraints": {"length": {"min": 1, "max": 20}},
-            "tasks": [{"name": "next_token", "type": "NStepPrediction", "params": {"n": 1}}],
+            "tasks": [{"id": "next_token", "type": "NStepPrediction", "params": {"n": 1}}],
         },
         "seqbench": {
             "mode": "online",
@@ -205,14 +225,14 @@ def test_from_run_cfg_symseq_source():
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},
             "input_mapping": {"base": "one_hot"},
-            "task": {"source": "symseq", "name": "next_token"},
+            "task": {"source": "symseq", "ref_id": "next_token"},
         },
     }
     run_cfg = cfg_mod.load(raw)
     b = TaskTargetBuilder.from_run_cfg(run_cfg, encoder=_encoder(), pad_index=-1)
     assert b.source == TaskSource.SYMSEQ
     assert b.kind == "per_token"
-    assert b.task_name == "1_step_prediction"
+    assert b.task_id == "next_token"
 
 
 def test_from_run_cfg_seqbench_state_classification_requires_state_id_fn():
@@ -228,7 +248,7 @@ def test_from_run_cfg_seqbench_state_classification_requires_state_id_fn():
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 20},
             "input_mapping": {"base": "one_hot"},
-            "task": {"source": "seqbench", "type": "StateClassification"},
+            "task": {"source": "seqbench", "id": "state_classification", "type": "StateClassification"},
         },
     }
     run_cfg = cfg_mod.load(raw)

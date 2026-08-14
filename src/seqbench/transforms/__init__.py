@@ -107,29 +107,24 @@ def compose_transforms_from_config(input_mapping):
 
     Returns ``None`` if no transforms are configured.
     """
-    transforms_spec = input_mapping.transforms  # list[dict] with a 'name' key each
+    transforms_spec = input_mapping.transforms
     if not transforms_spec:
         return None
 
-    # [{name: "ExpandDim", axis: 1, ...}, ...] → [(name, {axis: 1, ...}), ...]
-    items = [
-        (t['name'], {k: v for k, v in t.items() if k != 'name'})
-        for t in transforms_spec
-    ]
-
     transforms = []
-    for name, params in items:
-        params = _normalize_params(params or {})
-        time_spec = _parse_time_behavior(params.pop("time_behavior", None))
+    for spec in transforms_spec:
+        transform_type = spec["type"]
+        params = _normalize_params(dict(spec.get("params") or {}))
+        time_spec = _parse_time_behavior(spec.get("time_behavior"))
 
         try:
             # Handle dotted paths (e.g., "tonic.transforms.ToFrame")
-            if "." in name:
-                parts = name.split(".")
+            if "." in transform_type:
+                parts = transform_type.split(".")
                 module = importlib.import_module(".".join(parts[:-1]))
                 obj = getattr(module, parts[-1])
             else:
-                obj = globals()[name]
+                obj = globals()[transform_type]
 
             # Wrap functions, instantiate classes
             if inspect.isclass(obj):
@@ -137,10 +132,12 @@ def compose_transforms_from_config(input_mapping):
             elif callable(obj):
                 t = FunctionalTransform(obj, **params)
             else:
-                raise ValueError(f"{name} is not callable")
+                raise ValueError(f"{transform_type} is not callable")
 
         except Exception as e:
-            raise RuntimeError(f"Could not create transform {name} with params {params}") from e
+            raise RuntimeError(
+                f"Could not create transform {transform_type} with params {params}"
+            ) from e
 
         if time_spec is not None:
             t = DeclaredTimeBehavior(t, time_spec)

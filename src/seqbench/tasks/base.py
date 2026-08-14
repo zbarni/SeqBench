@@ -31,9 +31,8 @@ class Target:
 
 
 class Task(ABC):
-    """Abstract base for SeqBench tasks."""
+    """Anonymous task behavior; configured IDs own target identity."""
 
-    name: str
     # Output structure of the produced Target, known without running the task
     # (consumed by TaskTargetBuilder / SeqDataset to choose the output path).
     kind: Literal["per_token", "per_trial"]
@@ -45,6 +44,3 @@ class Task(ABC):
 
     @abstractmethod
     def __call__(self, sample: GeneratorSample) -> Target: ...
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}(name={self.name!r})"

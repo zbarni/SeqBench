@@ -99,8 +99,8 @@ def _build_dataset(raw, *, dataset_root=None, config_file_path=None, size=8):
 
 
 _SYMSEQ_NEXT = dict(
-    task={"source": "symseq", "name": "next_token"},
-    symseq_tasks=[{"name": "next_token", "type": "NStepPrediction", "params": {"n": 1}}],
+    task={"source": "symseq", "ref_id": "next_token"},
+    symseq_tasks=[{"id": "next_token", "type": "NStepPrediction", "params": {"n": 1}}],
 )
 
 
@@ -127,7 +127,7 @@ def test_symseq_next_token_is_prediction_not_classification():
 
 
 def test_state_classification_reproduces_legacy_classify():
-    ds = _build_dataset(_raw(task={"source": "seqbench", "type": "StateClassification"}))
+    ds = _build_dataset(_raw(task={"source": "seqbench", "id": "state_classification", "type": "StateClassification"}))
     assert ds.per_token_classify is True
     assert ds._wants_target_probs is False
 
@@ -142,7 +142,7 @@ def test_state_classification_reproduces_legacy_classify():
 
 def test_per_trial_classification_one_label_per_sample():
     ds = _build_dataset(
-        _raw(task={"source": "seqbench", "type": "Classification",
+        _raw(task={"source": "seqbench", "id": "classification", "type": "Classification",
                    "params": {"label_source": "first"}}, combine=False)
     )
     assert ds.is_per_trial is True
@@ -157,7 +157,7 @@ def test_per_trial_classification_one_label_per_sample():
 def test_combine_with_per_trial_task_labels_at_boundaries():
     """combine_sequences + per_trial task: label at last position of each trial, rest masked."""
     ds = _build_dataset(
-        _raw(task={"source": "seqbench", "type": "Classification",
+        _raw(task={"source": "seqbench", "id": "classification", "type": "Classification",
                    "params": {"label_source": "first"}}, combine=True)
     )
     assert ds.is_per_trial is False
@@ -178,7 +178,7 @@ def test_combine_base_label_source_raises():
     """label_source='base' + combine_sequences must raise at construction time."""
     with pytest.raises(ValueError, match="label_source='base'"):
         _build_dataset(
-            _raw(task={"source": "seqbench", "type": "Classification",
+            _raw(task={"source": "seqbench", "id": "classification", "type": "Classification",
                        "params": {"label_source": "base"}}, combine=True)
         )
 
@@ -202,9 +202,11 @@ def test_file_mode_roundtrip_matches_online(tmp_path):
     ds_file = _build_dataset(raw, dataset_root=dataset_root,
                              config_file_path=str(cfg_path))
 
-    # the serialized dataset carries intrinsic targets (NBack nback_match)
+    # Only explicitly configured SymSeq targets are serialized.
     with open(os.path.join(dataset_root, "train")) as fh:
-        assert "nback_match" in fh.read()
+        serialized = fh.read()
+        assert "next_token" in serialized
+        assert "nback_match" not in serialized
 
     # reading must not raise (configured target was serialized) and match online
     for i in range(4):
@@ -256,7 +258,7 @@ def test_label_source_base_reads_from_base_dataset():
             "time_grid": {"dt": 0.1},
             "composition": {"combine_sequences": False, "sample_length": 1},
             "input_mapping": {"base": "shd", "base_params": {}, "transforms": []},
-            "task": {"source": "seqbench", "type": "Classification",
+            "task": {"source": "seqbench", "id": "classification", "type": "Classification",
                      "params": {"label_source": "base"}},
         },
     }
@@ -279,7 +281,7 @@ def test_label_source_base_reads_from_base_dataset():
     for i in range(4):
         gs = ds.gs.generate(i, compute_length=False)
         # task is deferred — target must NOT be pre-cached at draw time
-        assert ds.target_builder.task_name not in (gs.targets or {})
+        assert ds.target_builder.task_id not in (gs.targets or {})
 
         sample = ds.gensample_to_sample(gs)
         class_idx = int(gs.class_seq[0])

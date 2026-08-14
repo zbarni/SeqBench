@@ -34,7 +34,19 @@ def validate(config: Path) -> None:
     typer.echo(f"Storage path: {run_cfg.seqbench.storage.path}")
     typer.echo(f"Input mapping: {run_cfg.seqbench.input_mapping.base}")
     typer.echo(f"Task source: {_enum_value(task.source)}")
-    typer.echo(f"Task: {task.name or task.type}")
+    task_id = task.ref_id if task.source == cfg_mod.TaskSource.SYMSEQ else task.id
+    typer.echo(f"Task: {task_id}")
+    if task.type is not None:
+        typer.echo(f"Task type: {task.type}")
+
+
+@app.command("list-tasks")
+def list_tasks() -> None:
+    """List registered SeqBench task types."""
+    from seqbench.tasks.registry import registered_types
+
+    for type_name in registered_types():
+        typer.echo(type_name)
 
 
 @app.command()

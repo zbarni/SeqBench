@@ -945,7 +945,7 @@ class SeqDataset(Dataset):
         task = self.target_builder.task
         if (
             getattr(task, "needs_base_dataset", False)
-            and not (gensample.targets and self.target_builder.task_name in gensample.targets)
+            and not (gensample.targets and self.target_builder.task_id in gensample.targets)
         ):
             class_idx = int(gensample.class_seq[0])
             candidates = self.base_dataset.class_dict[class_idx]

@@ -167,7 +167,7 @@ class TestCompose:
             InputMappingCfg(
                 base="one_hot",
                 transforms=[
-                    {"name": "torch.clone", "time_behavior": "preserve"},
+                    {"type": "torch.clone", "time_behavior": "preserve"},
                 ],
             )
         )
@@ -182,7 +182,7 @@ class TestCompose:
                 base="one_hot",
                 transforms=[
                     {
-                        "name": "torch.clone",
+                        "type": "torch.clone",
                         "time_behavior": {"kind": "create", "out_dt": 0.05},
                     },
                 ],
@@ -302,6 +302,68 @@ class TestNormalizeParams:
         assert _normalize_params(params) == params
 
 
+class TestTransformConfig:
+    def test_type_with_optional_params_and_time_behavior(self):
+        cfg = InputMappingCfg(
+            base="one_hot",
+            transforms=[
+                {"type": "torch.clone"},
+                {
+                    "type": "ExpandDim",
+                    "params": {"axis": 0, "target_size": 4},
+                    "time_behavior": "preserve",
+                },
+            ],
+        )
+        assert cfg.transforms[0] == {"type": "torch.clone"}
+
+    def test_transforms_must_be_a_list(self):
+        with pytest.raises(ValueError, match="transforms must be a list"):
+            InputMappingCfg(base="one_hot", transforms={"type": "torch.clone"})
+
+    def test_transform_entry_must_be_a_mapping(self):
+        with pytest.raises(ValueError, match=r"transforms\[0\] must be a mapping"):
+            InputMappingCfg(base="one_hot", transforms=["torch.clone"])
+
+    @pytest.mark.parametrize("transform_type", [None, "", 3])
+    def test_type_is_required_and_non_empty(self, transform_type):
+        entry = {} if transform_type is None else {"type": transform_type}
+        with pytest.raises(ValueError, match=r"transforms\[0\]\.type"):
+            InputMappingCfg(base="one_hot", transforms=[entry])
+
+    def test_params_must_be_a_mapping(self):
+        with pytest.raises(ValueError, match=r"transforms\[0\]\.params"):
+            InputMappingCfg(
+                base="one_hot",
+                transforms=[{"type": "ExpandDim", "params": ["axis", 0]}],
+            )
+
+    def test_legacy_name_is_rejected(self):
+        with pytest.raises(ValueError, match="unknown keys.*name"):
+            InputMappingCfg(base="one_hot", transforms=[{"name": "ExpandDim"}])
+
+    def test_flattened_constructor_arguments_are_rejected(self):
+        with pytest.raises(ValueError, match="unknown keys.*axis"):
+            InputMappingCfg(
+                base="one_hot",
+                transforms=[{"type": "ExpandDim", "axis": 0}],
+            )
+
+    def test_unknown_entry_keys_are_rejected(self):
+        with pytest.raises(ValueError, match="unknown keys.*label"):
+            InputMappingCfg(
+                base="one_hot",
+                transforms=[{"type": "torch.clone", "label": "clone"}],
+            )
+
+    def test_time_behavior_must_be_a_string_or_mapping(self):
+        with pytest.raises(ValueError, match=r"transforms\[0\]\.time_behavior"):
+            InputMappingCfg(
+                base="one_hot",
+                transforms=[{"type": "torch.clone", "time_behavior": ["preserve"]}],
+            )
+
+
 class TestComposeFromConfig:
     def test_no_transforms_returns_none(self):
         cfg = InputMappingCfg(base="one_hot", transforms=[])
@@ -310,7 +372,12 @@ class TestComposeFromConfig:
     def test_builds_class_transform_with_params(self):
         cfg = InputMappingCfg(
             base="one_hot",
-            transforms=[{"name": "ExpandDim", "axis": 0, "target_size": 6}],
+            transforms=[
+                {
+                    "type": "ExpandDim",
+                    "params": {"axis": 0, "target_size": 6},
+                }
+            ],
         )
         comp = compose_transforms_from_config(cfg)
         assert isinstance(comp, Compose)
@@ -321,7 +388,7 @@ class TestComposeFromConfig:
     def test_dotted_path_resolves_callable_and_wraps(self):
         cfg = InputMappingCfg(
             base="one_hot",
-            transforms=[{"name": "torch.flatten", "start_dim": 0}],
+            transforms=[{"type": "torch.flatten", "params": {"start_dim": 0}}],
         )
         comp = compose_transforms_from_config(cfg)
         # A plain function gets wrapped in FunctionalTransform.
@@ -332,8 +399,8 @@ class TestComposeFromConfig:
         cfg = InputMappingCfg(
             base="one_hot",
             transforms=[
-                {"name": "PowerLaw", "gamma": 2.0},
-                {"name": "Flatten", "start_dim": 0},
+                {"type": "PowerLaw", "params": {"gamma": 2.0}},
+                {"type": "Flatten", "params": {"start_dim": 0}},
             ],
         )
         comp = compose_transforms_from_config(cfg)
@@ -345,21 +412,29 @@ class TestComposeFromConfig:
         # "(40, 40)" / "None" strings should be normalized before instantiation.
         cfg = InputMappingCfg(
             base="one_hot",
-            transforms=[{"name": "CenterCrop", "sensor_size": "(4, 4, 1)", "output_size": "(2, 2)"}],
+            transforms=[
+                {
+                    "type": "CenterCrop",
+                    "params": {
+                        "sensor_size": "(4, 4, 1)",
+                        "output_size": "(2, 2)",
+                    },
+                }
+            ],
         )
         comp = compose_transforms_from_config(cfg)
         out = comp(torch.arange(16).reshape(4, 4))
         assert out.shape == (2, 2)
 
-    def test_unknown_name_raises_runtime_error(self):
-        cfg = InputMappingCfg(base="one_hot", transforms=[{"name": "DoesNotExist"}])
+    def test_unknown_type_raises_runtime_error(self):
+        cfg = InputMappingCfg(base="one_hot", transforms=[{"type": "DoesNotExist"}])
         with pytest.raises(RuntimeError, match="Could not create transform DoesNotExist"):
             compose_transforms_from_config(cfg)
 
     def test_bad_params_wrapped_in_runtime_error(self):
         cfg = InputMappingCfg(
             base="one_hot",
-            transforms=[{"name": "ExpandDim", "nonexistent_arg": 1}],
+            transforms=[{"type": "ExpandDim", "params": {"nonexistent_arg": 1}}],
         )
         with pytest.raises(RuntimeError, match="Could not create transform ExpandDim"):
             compose_transforms_from_config(cfg)

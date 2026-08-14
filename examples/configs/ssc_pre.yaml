@@ -22,7 +22,7 @@ symseq:
       min: 1
       max: 20
   tasks:
-    - name: next_token
+    - id: next_token
       type: NStepPrediction
       params:
         n: 1
@@ -59,4 +59,4 @@ seqbench:
     transforms: []
   task:
     source: symseq
-    name: next_token
+    ref_id: next_token

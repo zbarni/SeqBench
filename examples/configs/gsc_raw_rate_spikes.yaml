@@ -22,7 +22,7 @@ symseq:
       min: 1
       max: 20
   tasks:
-    - name: next_token
+    - id: next_token
       type: NStepPrediction
       params:
         n: 1
@@ -49,31 +49,38 @@ seqbench:
       split: training
       return_raw: true
     transforms:
-      - name: MFCC
-        sample_rate: 16000
-        n_mfcc: 13
-        n_mels: 40
-        n_fft: 512
-        win_length: 400
-        hop_length: 160
-      - name: AdaptivePercentileNorm
-        floor_percentile: 10.0
-        ceil_percentile: 90.0
-      - name: PowerLaw
-        gamma: 5.0
-      - name: ExpandDim
-        axis: 1
-        target_size: 700
-      - name: RateCoding
-        max_rate: 100.0
-        normalize: true
-      - name: PoissonEncoding
-        temporal: true
-        spike_dt: 0.001
-      - name: BinAlongAxis
-        bin_size: 5
-        bin_axis: -1
-        reduction: binary
+      - type: MFCC
+        params:
+          sample_rate: 16000
+          n_mfcc: 13
+          n_mels: 40
+          n_fft: 512
+          win_length: 400
+          hop_length: 160
+      - type: AdaptivePercentileNorm
+        params:
+          floor_percentile: 10.0
+          ceil_percentile: 90.0
+      - type: PowerLaw
+        params:
+          gamma: 5.0
+      - type: ExpandDim
+        params:
+          axis: 1
+          target_size: 700
+      - type: RateCoding
+        params:
+          max_rate: 100.0
+          normalize: true
+      - type: PoissonEncoding
+        params:
+          temporal: true
+          spike_dt: 0.001
+      - type: BinAlongAxis
+        params:
+          bin_size: 5
+          bin_axis: -1
+          reduction: binary
   task:
     source: symseq
-    name: next_token
+    ref_id: next_token
