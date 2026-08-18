@@ -21,7 +21,7 @@ def test_state_classification_maps_state_ids():
     task = StateClassification()
     task.state_id_fn = lambda s: id_map[s]
     tgt = task(_gs(["a", "b", "c", "#"]))
-    assert tgt.kind == "per_token"
+    assert tgt.granularity == "per_token"
     assert tgt.values == [3, 1, 2, 0]
     assert tgt.mask == [True, True, True, True]
 

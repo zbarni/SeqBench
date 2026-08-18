@@ -40,7 +40,7 @@ def build_symseq_source(config: Any) -> Any:
             "Install it, or supply a different TrialSource."
         ) from exc
 
-    generator_cfg, symbol_space_cfg, seed = _normalise_config(config)
+    generator_cfg, symbol_space_cfg, seed = _normalize_config(config)
 
     # Normalise: accept a GeneratorCfg dataclass or a plain dict.
     if isinstance(generator_cfg, dict):
@@ -111,7 +111,7 @@ def _with_configured_tasks(source: Any, config: Any) -> Any:
     return ConfiguredTrialSource(source, tasks)
 
 
-def _normalise_config(config: Any) -> tuple[Any, Any | None, int | None]:
+def _normalize_config(config: Any) -> tuple[Any, Any | None, int | None]:
     """Return ``(generator_cfg, symbol_space_cfg, effective_seed)``.
 
     ``RunConfig`` is preferred because it gives this boundary enough context to

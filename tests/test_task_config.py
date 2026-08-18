@@ -2,6 +2,7 @@ import copy
 
 import pytest
 from seqbench import config as cfg_mod
+from seqbench.sources import build_symseq_source
 
 
 def _raw():
@@ -90,3 +91,14 @@ def test_old_name_field_is_not_accepted():
     raw["symseq"]["tasks"][0]["name"] = raw["symseq"]["tasks"][0].pop("id")
     with pytest.raises(ValueError, match=r"unknown keys.*name"):
         cfg_mod.load(raw)
+
+
+def test_intrinsic_task_generator_mismatch_fails_when_source_is_built():
+    pytest.importorskip("symseq")
+    raw = _raw()
+    raw["symseq"]["tasks"] = [{"id": "valid", "type": "Grammaticality"}]
+    raw["seqbench"]["task"] = {"source": "symseq", "ref_id": "valid"}
+
+    config = cfg_mod.load(raw)
+    with pytest.raises(ValueError, match=r"requires intrinsic target.*grammaticality"):
+        build_symseq_source(config)

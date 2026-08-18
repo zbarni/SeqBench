@@ -43,7 +43,11 @@ def _targets_to_json(targets: Optional[Dict[str, Target]]) -> str:
     if not targets:
         return ""
     obj = {
-        name: {"values": t.values, "mask": t.mask, "kind": t.kind}
+        name: {
+            "values": t.values,
+            "mask": t.mask,
+            "granularity": t.granularity,
+        }
         for name, t in targets.items()
     }
     return json.dumps(obj, default=_json_default)
@@ -56,7 +60,9 @@ def _targets_from_json(field: str) -> Optional[Dict[str, Target]]:
         return None
     obj = json.loads(field)
     return {
-        name: Target(values=d["values"], mask=d["mask"], kind=d["kind"])
+        name: Target(
+            values=d["values"], mask=d["mask"], granularity=d["granularity"]
+        )
         for name, d in obj.items()
     }
 

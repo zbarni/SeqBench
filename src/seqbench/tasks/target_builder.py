@@ -52,7 +52,7 @@ class ResolvedTarget:
 
     target_seq: np.ndarray
     mask: np.ndarray | None
-    kind: Literal["per_token", "per_trial"]
+    granularity: Literal["per_token", "per_trial"]
 
 
 class TaskTargetBuilder:
@@ -64,7 +64,7 @@ class TaskTargetBuilder:
         task: Any,
         encoder: SymbolEncoder,
         pad_index: int = -1,
-        kind: Literal["per_token", "per_trial"] = "per_token",
+        granularity: Literal["per_token", "per_trial"] = "per_token",
         label_space: str | None = None,
     ):
         self.source = source
@@ -72,7 +72,7 @@ class TaskTargetBuilder:
         self.task = task
         self.encoder = encoder
         self.pad_index = pad_index
-        self._kind = kind
+        self._granularity = granularity
         # symseq-source tasks (and any task without the attribute) target the
         # encoded class-id space; seqbench tasks declare their own label_space.
         self.label_space = label_space or getattr(task, "label_space", "class_id")
@@ -103,7 +103,7 @@ class TaskTargetBuilder:
                         "a state_id_fn (RestrictedTargetProbGenerator.unred_state_to_id)."
                     )
                 task.state_id_fn = state_id_fn
-            kind = task.kind
+            granularity = task.granularity
         else:  # SYMSEQ
             if run_cfg.symseq is None:
                 raise ValueError("seqbench.task.source='symseq' requires a symseq section")
@@ -119,7 +119,7 @@ class TaskTargetBuilder:
 
             task_id = entry.id
             task = symseq_registry.build(entry.type, **entry.params)
-            kind = task.kind
+            granularity = task.granularity
 
         if (
             getattr(task, "needs_base_dataset", False)
@@ -137,12 +137,12 @@ class TaskTargetBuilder:
             task=task,
             encoder=encoder,
             pad_index=pad_index,
-            kind=kind,
+            granularity=granularity,
         )
 
     @property
-    def kind(self) -> Literal["per_token", "per_trial"]:
-        return self._kind
+    def granularity(self) -> Literal["per_token", "per_trial"]:
+        return self._granularity
 
     def num_classes(self, *, prob_generator=None, base_dataset=None) -> int:
         """Number of distinct classes in the task's target label space.
@@ -221,8 +221,10 @@ class TaskTargetBuilder:
         return self.task(gensample)
 
     def _encode_symseq_target(self, t, target_len: int) -> Target:
-        if t.kind == "per_trial":
-            return Target(values=_scalarize(t.values), mask=None, kind="per_trial")
+        if t.granularity == "per_trial":
+            return Target(
+                values=_scalarize(t.values), mask=None, granularity="per_trial"
+            )
 
         values = list(t.values)
         mask = list(t.mask) if t.mask is not None else [True] * len(values)
@@ -247,12 +249,14 @@ class TaskTargetBuilder:
             )
         encoded += [None] * pad  # EOS position(s)
         out_mask = [v is not None for v in encoded]
-        return Target(values=encoded, mask=out_mask, kind="per_token")
+        return Target(values=encoded, mask=out_mask, granularity="per_token")
 
     def _to_resolved(self, target: Target, length: int) -> ResolvedTarget:
-        if target.kind == "per_trial":
+        if target.granularity == "per_trial":
             return ResolvedTarget(
-                target_seq=np.asarray(target.values), mask=None, kind="per_trial"
+                target_seq=np.asarray(target.values),
+                mask=None,
+                granularity="per_trial",
             )
         values = list(target.values)
         mask = (
@@ -265,7 +269,9 @@ class TaskTargetBuilder:
             if m and v is not None:
                 out[i] = int(v)
         return ResolvedTarget(
-            target_seq=out, mask=np.asarray(mask, dtype=bool), kind="per_token"
+            target_seq=out,
+            mask=np.asarray(mask, dtype=bool),
+            granularity="per_token",
         )
 
 

@@ -381,12 +381,12 @@ class SeqDataset(Dataset):
         # With combine_sequences a per_trial task's labels are spread to token
         # boundaries by __concat_targets, so the effective output is per_token.
         self.is_per_trial = (
-            self.target_builder.kind == "per_trial"
+            self.target_builder.granularity == "per_trial"
             and not self._combine_sequences
         )
         self._wants_target_probs = (
             not self.is_per_trial
-            and self.target_builder.kind == "per_token"
+            and self.target_builder.granularity == "per_token"
             and hasattr(self.generator, "transitions")
             and not isinstance(self.target_builder.task, (Classification, StateClassification))
         )

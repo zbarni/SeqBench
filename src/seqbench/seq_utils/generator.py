@@ -229,17 +229,17 @@ class SequenceGenerator:
         if not new:
             return acc
         for name, t in new.items():
-            if t.kind == "per_trial":
+            if t.granularity == "per_trial":
                 n = new_seq_len
                 t = Target(
                     values=[None] * (n - 1) + [t.values],
                     mask=[False] * (n - 1) + [True],
-                    kind="per_token",
+                    granularity="per_token",
                 )
             if acc is None:
                 acc = {}
             if name not in acc:
-                acc[name] = Target(values=[], mask=[], kind="per_token")
+                acc[name] = Target(values=[], mask=[], granularity="per_token")
             acc[name].values = list(acc[name].values) + list(t.values)
             acc[name].mask = list(acc[name].mask) + list(t.mask)
         return acc
@@ -296,7 +296,7 @@ class SequenceGenerator:
 
         out: dict[str, Target] = {}
         for name, t in trial.targets.items():
-            if t.kind == "per_token":
+            if t.granularity == "per_token":
                 values = list(t.values)
                 mask = list(t.mask) if t.mask is not None else [True] * len(values)
                 pad = target_len - len(values)
@@ -307,7 +307,11 @@ class SequenceGenerator:
                     )
                 values = values + [None] * pad  # EOS position(s)
                 mask = mask + [False] * pad
-                out[name] = Target(values=values, mask=mask, kind="per_token")
+                out[name] = Target(
+                    values=values, mask=mask, granularity="per_token"
+                )
             else:
-                out[name] = Target(values=t.values, mask=None, kind="per_trial")
+                out[name] = Target(
+                    values=t.values, mask=None, granularity="per_trial"
+                )
         return out or None

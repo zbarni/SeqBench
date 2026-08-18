@@ -39,13 +39,15 @@ def test_roundtrip_per_token_targets_with_none_and_mask():
         4,
         targets={
             "next_token": Target(
-                values=[2, 3, 0, None], mask=[True, True, True, False], kind="per_token"
+                values=[2, 3, 0, None],
+                mask=[True, True, True, False],
+                granularity="per_token",
             )
         },
     )
     out = _roundtrip(gs)
     t = out.targets["next_token"]
-    assert t.kind == "per_token"
+    assert t.granularity == "per_token"
     assert t.values == [2, 3, 0, None]
     assert t.mask == [True, True, True, False]
 
@@ -55,7 +57,13 @@ def test_roundtrip_numpy_values():
         np.array([1, 0]),
         np.array(["a", "#"], dtype=object),
         2,
-        targets={"t": Target(values=list(np.array([5, 0])), mask=[True, True], kind="per_token")},
+        targets={
+            "t": Target(
+                values=list(np.array([5, 0])),
+                mask=[True, True],
+                granularity="per_token",
+            )
+        },
     )
     out = _roundtrip(gs)
     assert out.targets["t"].values == [5, 0]
@@ -81,6 +89,13 @@ def test_parse_rejects_mismatched_class_and_state_lengths():
 
 def test_parse_rejects_malformed_targets():
     line = "[1, 0]::['a', '#']::2::{bad json"
+    with pytest.raises(ValueError, match="targets field"):
+        DatasetGenerator.create_gensample_from_str(line)
+
+
+def test_parse_rejects_legacy_target_vocabulary():
+    legacy_targets = '{"t":{"values":[2,0],"mask":[true,true],"kind":"per_token"}}'
+    line = f"[1, 0]::['a', '#']::2::{legacy_targets}"
     with pytest.raises(ValueError, match="targets field"):
         DatasetGenerator.create_gensample_from_str(line)
 
@@ -113,4 +128,4 @@ def test_roundtrip_configured_nback_targets():
     for name in gs.targets:
         assert out.targets[name].values == gs.targets[name].values
         assert out.targets[name].mask == gs.targets[name].mask
-        assert out.targets[name].kind == gs.targets[name].kind
+        assert out.targets[name].granularity == gs.targets[name].granularity

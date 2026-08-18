@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 LabelSource = Literal["base", "first", "last", "current"]
-Level = Literal["per_trial", "per_token"]
+Granularity = Literal["per_trial", "per_token"]
 
 
 @register("Classification")
@@ -42,9 +42,9 @@ class Classification(Task):
         - ``"first"``: ``class_seq[0]``.
         - ``"last"``:  ``class_seq[-1]``.
         - ``"current"``: ``class_seq[i]`` at each token position *i*
-          (only valid with ``level="per_token"``).
+          (only valid with ``granularity="per_token"``).
 
-    level : {"per_trial", "per_token"}
+    granularity : {"per_trial", "per_token"}
         Output granularity.
 
         - ``"per_trial"`` (default): one scalar label for the whole sequence.
@@ -54,31 +54,32 @@ class Classification(Task):
           all non-EOS positions.  The EOS position is always masked.
     """
 
-    # kind and label_space are set dynamically in __init__
-    kind: str = "per_trial"
+    # granularity and label_space are set dynamically in __init__
+    granularity: str = "per_trial"
     label_space: str = "class_id"
 
     def __init__(
         self,
         label_source: LabelSource = "base",
-        level: Level = "per_trial",
+        granularity: Granularity = "per_trial",
     ):
         if label_source not in ("base", "first", "last", "current"):
             raise ValueError(
                 f"label_source must be one of 'base'|'first'|'last'|'current', "
                 f"got {label_source!r}"
             )
-        if level not in ("per_trial", "per_token"):
+        if granularity not in ("per_trial", "per_token"):
             raise ValueError(
-                f"level must be 'per_trial' or 'per_token', got {level!r}"
+                "granularity must be 'per_trial' or 'per_token', "
+                f"got {granularity!r}"
             )
-        if label_source == "current" and level == "per_trial":
+        if label_source == "current" and granularity == "per_trial":
             raise ValueError(
-                "label_source='current' requires level='per_token' "
+                "label_source='current' requires granularity='per_token' "
                 "(a single 'current' label is undefined at trial level)."
             )
         self.label_source = label_source
-        self.kind = level  # overrides the class attribute
+        self.granularity = granularity  # overrides the class attribute
         # "base" labels live in the base dataset's class space; first/last/current
         # are symbolic class ids.
         self.label_space = "base_label" if label_source == "base" else "class_id"
@@ -94,7 +95,7 @@ class Classification(Task):
         # --- "current" is only per_token ---
         if self.label_source == "current":
             mask = [True] * (len(seq) - 1) + [False]  # mask EOS slot
-            return Target(values=seq, mask=mask, kind="per_token")
+            return Target(values=seq, mask=mask, granularity="per_token")
 
         # --- scalar label for "base" / "first" / "last" ---
         if self.label_source == "base":
@@ -111,13 +112,13 @@ class Classification(Task):
         else:  # "last"
             label = seq[-1]
 
-        if self.kind == "per_trial":
-            return Target(values=label, mask=None, kind="per_trial")
+        if self.granularity == "per_trial":
+            return Target(values=label, mask=None, granularity="per_trial")
 
         # per_token: broadcast scalar label across all non-EOS positions
         n = len(seq)
         mask = [True] * (n - 1) + [False]  # EOS position masked
-        return Target(values=[label] * n, mask=mask, kind="per_token")
+        return Target(values=[label] * n, mask=mask, granularity="per_token")
 
 
 @register("StateClassification")
@@ -131,7 +132,7 @@ class StateClassification(Task):
     :class:`~seqbench.tasks.target_builder.TaskTargetBuilder`.
     """
 
-    kind = "per_token"
+    granularity = "per_token"
     label_space = "unreduced_state"
 
     def __init__(self):
@@ -145,4 +146,6 @@ class StateClassification(Task):
                 "grammar generator with transitions."
             )
         values = [self.state_id_fn(s) for s in sample.state_seq]
-        return Target(values=values, mask=[True] * len(values), kind="per_token")
+        return Target(
+            values=values, mask=[True] * len(values), granularity="per_token"
+        )

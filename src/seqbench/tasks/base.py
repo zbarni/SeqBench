@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 class Target:
     values: list[Any] | Any
     mask: list[bool] | None
-    kind: Literal["per_token", "per_trial"]
+    granularity: Literal["per_token", "per_trial"]
 
 
 class Task(ABC):
@@ -35,7 +35,7 @@ class Task(ABC):
 
     # Output structure of the produced Target, known without running the task
     # (consumed by TaskTargetBuilder / SeqDataset to choose the output path).
-    kind: Literal["per_token", "per_trial"]
+    granularity: Literal["per_token", "per_trial"]
     # The label space the task's targets live in, used to compute num_classes:
     #   "class_id"        -> len(encoder) (alphabet + EOS)
     #   "unreduced_state" -> prob_generator.num_unreduced_states (grammar)

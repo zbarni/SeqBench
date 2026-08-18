@@ -67,7 +67,7 @@ class TestSeqbenchSource:
             GeneratorSample(gs.class_seq, gs.state_seq, 4)
         )
         np.testing.assert_array_equal(res.target_seq, [1, 2, 3, 0])
-        assert res.kind == "per_token"
+        assert res.granularity == "per_token"
 
     def test_to_target_seq_recomputes_when_absent(self):
         # legacy on-disk sample (targets=None) -> seqbench task recomputed
@@ -91,7 +91,11 @@ class TestSeqbenchSource:
         )
         gs = _gs()
         gs.targets = {
-            b.task_id: Target(values=[9, 9, 9, None], mask=[True, True, True, False], kind="per_token")
+            b.task_id: Target(
+                values=[9, 9, 9, None],
+                mask=[True, True, True, False],
+                granularity="per_token",
+            )
         }
         res = b.to_target_seq(gs)
         np.testing.assert_array_equal(res.target_seq, [9, 9, 9, -1])
@@ -104,18 +108,18 @@ class TestSeqbenchSource:
             task_id="classification",
             task=Classification(label_source="first"),
             encoder=_encoder(),
-            kind="per_trial",
+            granularity="per_trial",
         )
         res = b.to_target_seq(_gs())
-        assert res.kind == "per_trial"
+        assert res.granularity == "per_trial"
         assert int(res.target_seq) == 1  # class_seq[0]
 
     def test_classification_per_token_current(self):
-        """level='per_token', label_source='current': target[i] = class_seq[i], EOS masked."""
+        """Per-token current-label targets align to class_seq with EOS masked."""
         from seqbench.tasks.classify import Classification
 
-        task = Classification(label_source="current", level="per_token")
-        assert task.kind == "per_token"
+        task = Classification(label_source="current", granularity="per_token")
+        assert task.granularity == "per_token"
 
         b = TaskTargetBuilder(
             source=TaskSource.SEQBENCH,
@@ -123,36 +127,36 @@ class TestSeqbenchSource:
             task=task,
             encoder=_encoder(),
             pad_index=-1,
-            kind="per_token",
+            granularity="per_token",
         )
         # _gs(): class_seq = [1, 2, 3, 0(EOS)]
         res = b.to_target_seq(_gs())
-        assert res.kind == "per_token"
+        assert res.granularity == "per_token"
         # EOS slot (index 3) is masked → replaced with pad_index=-1
         np.testing.assert_array_equal(res.target_seq, [1, 2, 3, -1])
 
     def test_classification_per_token_first(self):
-        """level='per_token', label_source='first': first class broadcast, EOS masked."""
+        """Per-token first-label targets broadcast with EOS masked."""
         from seqbench.tasks.classify import Classification
 
         b = TaskTargetBuilder(
             source=TaskSource.SEQBENCH,
             task_id="classification",
-            task=Classification(label_source="first", level="per_token"),
+            task=Classification(label_source="first", granularity="per_token"),
             encoder=_encoder(),
             pad_index=-1,
-            kind="per_token",
+            granularity="per_token",
         )
         res = b.to_target_seq(_gs())
-        assert res.kind == "per_token"
+        assert res.granularity == "per_token"
         np.testing.assert_array_equal(res.target_seq, [1, 1, 1, -1])
 
     def test_classification_current_per_trial_raises(self):
-        """label_source='current' with level='per_trial' must raise."""
+        """label_source='current' with per-trial granularity must raise."""
         from seqbench.tasks.classify import Classification
 
         with pytest.raises(ValueError, match="current"):
-            Classification(label_source="current", level="per_trial")
+            Classification(label_source="current", granularity="per_trial")
 
 
 # --------------------------------------------------------------------------
@@ -178,27 +182,29 @@ class TestSymseqSource:
         res = b._to_resolved(target, 4)
         np.testing.assert_array_equal(res.target_seq, [2, 3, -1, -1])
 
-    def test_kind_detected_per_token(self):
+    def test_granularity_detected_per_token(self):
         task = symseq_registry.build("NStepPrediction", n=1)
-        assert task.kind == "per_token"
+        assert task.granularity == "per_token"
 
     def test_per_trial_intrinsic_scalarized(self):
         # a per_trial symseq Target (e.g. grammaticality) -> scalar int
         class _GramTask:
-            kind = "per_trial"
+            granularity = "per_trial"
 
             def __call__(self, trial):
-                return SymseqTarget(values=True, mask=None, kind="per_trial")
+                return SymseqTarget(
+                    values=True, mask=None, granularity="per_trial"
+                )
 
         b = TaskTargetBuilder(
             source=TaskSource.SYMSEQ,
             task_id="grammaticality",
             task=_GramTask(),
             encoder=_encoder(),
-            kind="per_trial",
+            granularity="per_trial",
         )
         target = b.resolve(self._trial(), np.array([1, 2, 3, 0]), None)
-        assert target.kind == "per_trial"
+        assert target.granularity == "per_trial"
         assert target.values == 1  # bool True -> int 1
 
 
@@ -231,7 +237,7 @@ def test_from_run_cfg_symseq_source():
     run_cfg = cfg_mod.load(raw)
     b = TaskTargetBuilder.from_run_cfg(run_cfg, encoder=_encoder(), pad_index=-1)
     assert b.source == TaskSource.SYMSEQ
-    assert b.kind == "per_token"
+    assert b.granularity == "per_token"
     assert b.task_id == "next_token"
 
 

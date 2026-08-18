@@ -28,7 +28,7 @@ from seqbench.transforms import compose_transforms_from_config
 
 
 @pytest.fixture(scope="class")
-def dataset_setup():
+def dataset_setup(tmp_path_factory):
     """Set up dataset for testing."""
     config_path = os.path.join(os.path.dirname(__file__), 'onehot_raw.yaml')
 
@@ -64,7 +64,7 @@ def dataset_setup():
     transforms = compose_transforms_from_config(inp_map)
 
     config_hash = get_config_hash(run_cfg, dataset_size=dataset_size)
-    dataset_root = f"{run_cfg.seqbench.storage.path}/{config_hash}"
+    dataset_root = str(tmp_path_factory.mktemp("seqbench-data") / config_hash)
 
     dataset = SeqDataset(
         config=run_cfg,

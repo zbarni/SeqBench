@@ -56,7 +56,11 @@ class _PerTrialSource:
         return Trial(
             symbols=["a", "b"],
             states=None,
-            targets={"lbl": SymseqTarget(values=1, mask=None, kind="per_trial")},
+            targets={
+                "lbl": SymseqTarget(
+                    values=1, mask=None, granularity="per_trial"
+                )
+            },
             meta={},
         )
 
@@ -68,7 +72,7 @@ def test_forwarded_targets_aligned_to_class_seq():
     assert set(gs.targets) == {"nback_match", "nback_role"}
     L = len(gs.class_seq)
     for name, t in gs.targets.items():
-        assert t.kind == "per_token"
+        assert t.granularity == "per_token"
         assert len(t.values) == L
         assert len(t.mask) == L
         # the appended EOS slot is masked out
@@ -109,7 +113,7 @@ def test_per_trial_target_spread_under_combine():
     assert gs.class_seq.shape[0] == 10
     assert gs.targets is not None and "lbl" in gs.targets
     t = gs.targets["lbl"]
-    assert t.kind == "per_token"
+    assert t.granularity == "per_token"
     assert len(t.values) == 10 and len(t.mask) == 10
     assert any(t.mask)  # at least one trial boundary carries the label
     for v, m in zip(t.values, t.mask):
@@ -125,5 +129,5 @@ def test_per_trial_target_forwarded_without_combine():
     )
     gs = gen.generate(idx=1, compute_length=True)
     assert gs.targets is not None
-    assert gs.targets["lbl"].kind == "per_trial"
+    assert gs.targets["lbl"].granularity == "per_trial"
     assert gs.targets["lbl"].values == 1

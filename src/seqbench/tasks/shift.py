@@ -28,7 +28,7 @@ class NStepMemory(Task):
     Positions ``[0..n-1]`` are masked.
     """
 
-    kind = "per_token"
+    granularity = "per_token"
     label_space = "class_id"
 
     def __init__(self, n: int):
@@ -40,10 +40,10 @@ class NStepMemory(Task):
         seq = list(sample.class_seq)
         L = len(seq)
         if self.n >= L:
-            return Target(values=[None] * L, mask=[False] * L, kind="per_token")
+            return Target(values=[None] * L, mask=[False] * L, granularity="per_token")
         values = [None] * self.n + seq[: L - self.n]
         mask = [False] * self.n + [True] * (L - self.n)
-        return Target(values=values, mask=mask, kind="per_token")
+        return Target(values=values, mask=mask, granularity="per_token")
 
 
 @register("NStepPrediction")
@@ -53,7 +53,7 @@ class NStepPrediction(Task):
     Last ``n`` positions are masked.
     """
 
-    kind = "per_token"
+    granularity = "per_token"
     label_space = "class_id"
 
     def __init__(self, n: int):
@@ -65,7 +65,7 @@ class NStepPrediction(Task):
         seq = list(sample.class_seq)
         L = len(seq)
         if self.n >= L:
-            return Target(values=[None] * L, mask=[False] * L, kind="per_token")
+            return Target(values=[None] * L, mask=[False] * L, granularity="per_token")
         values = seq[self.n:] + [None] * self.n
         mask = [True] * (L - self.n) + [False] * self.n
-        return Target(values=values, mask=mask, kind="per_token")
+        return Target(values=values, mask=mask, granularity="per_token")
